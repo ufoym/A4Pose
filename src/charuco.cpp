@@ -634,7 +634,7 @@ void drawDetectedCornersCharuco(InputOutputArray _image, InputArray _charucoCorn
             stringstream s;
             s << "id=" << id;
             putText(_image, s.str(), corner + Point2f(5, -5), FONT_HERSHEY_SIMPLEX, 0.5,
-                    cornerColor, 2);
+                    cornerColor, 1, LINE_AA);
         }
     }
 }

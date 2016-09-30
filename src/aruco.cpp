@@ -1441,7 +1441,7 @@ void drawDetectedMarkers(InputOutputArray _image, InputArrayOfArrays _corners,
             cent = cent / 4.;
             stringstream s;
             s << "id=" << _ids.getMat().ptr< int >(0)[i];
-            putText(_image, s.str(), cent, FONT_HERSHEY_SIMPLEX, 0.5, textColor, 2);
+			putText(_image, s.str(), cent, FONT_HERSHEY_SIMPLEX, 0.5, textColor, 1, LINE_AA);
         }
     }
 }
