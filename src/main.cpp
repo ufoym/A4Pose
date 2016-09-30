@@ -8,6 +8,7 @@ int main()
 	// settings
 
 	cv::Size frame_size(1280, 720);
+	const int frame_margin = 10;
 	const float aspect_ratio = 1.0f;
 	const int board_pad = 100;
 	const int squares_x = 5;
@@ -53,7 +54,7 @@ int main()
 	std::vector< cv::Mat > all_imgs;
 	cv::Mat frame;
 
-	for (int i = 0; ; ++i) {
+	for (int i = 0, prev_i = -frame_margin;; ++i) {
 		cap >> frame;
 
 		std::vector< int > ids;
@@ -78,10 +79,11 @@ int main()
 		if (key == 27) {
 			break;
 		}
-		else if (i % 10 == 0 && ids.size() > 0) {
+		else if (ids.size() > 0 && i - prev_i >= frame_margin) {
 			all_corners.push_back(corners);
 			all_ids.push_back(ids);
 			all_imgs.push_back(frame);
+			prev_i = i;
 			std::cout << "Frame captured #" << all_imgs.size() << std::endl;
 		}
 	}
@@ -117,7 +119,6 @@ int main()
 	int nFrames = (int)all_corners.size();
 	std::vector< cv::Mat > allCharucoCorners;
 	std::vector< cv::Mat > allCharucoIds;
-	std::vector< cv::Mat > filteredImages;
 	allCharucoCorners.reserve(nFrames);
 	allCharucoIds.reserve(nFrames);
 
@@ -128,10 +129,12 @@ int main()
 			all_corners[i], all_ids[i], all_imgs[i], ch_board,
 			currentCharucoCorners, currentCharucoIds, 
 			cameraMatrix, distCoeffs);
-
-		allCharucoCorners.push_back(currentCharucoCorners);
-		allCharucoIds.push_back(currentCharucoIds);
-		filteredImages.push_back(all_imgs[i]);
+		
+		const int num = currentCharucoCorners.size().height;
+		if (num > 4) {
+			allCharucoCorners.push_back(currentCharucoCorners);
+			allCharucoIds.push_back(currentCharucoIds);
+		}
 	}
 
 	if (allCharucoCorners.size() < 4) {
@@ -139,8 +142,7 @@ int main()
 		return 0;
 	}
 
-	double repError =
-		cv::aruco::calibrateCameraCharuco(
+	double repError = cv::aruco::calibrateCameraCharuco(
 		allCharucoCorners, allCharucoIds, ch_board, frame_size,
 		cameraMatrix, distCoeffs, rvecs, tvecs, 0);
 	
