@@ -71,16 +71,16 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>D:\portable\OpenCV\build_org\include;$(IncludePath)</IncludePath>
-    <LibraryPath>D:\portable\OpenCV\build_org\x64\vc12\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\portable\opencv\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\portable\opencv\x64\vc12\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>D:\portable\OpenCV\build_org\include;$(IncludePath)</IncludePath>
-    <LibraryPath>D:\portable\OpenCV\build_org\x64\vc12\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>D:\portable\opencv\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\portable\opencv\x64\vc12\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -149,7 +149,17 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="..\src\aruco.cpp" />
+    <ClCompile Include="..\src\charuco.cpp" />
+    <ClCompile Include="..\src\dictionary.cpp" />
+    <ClCompile Include="..\src\main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\aruco.hpp" />
+    <ClInclude Include="..\src\charuco.hpp" />
+    <ClInclude Include="..\src\dictionary.hpp" />
+    <ClInclude Include="..\src\precomp.hpp" />
+    <ClInclude Include="..\src\predefined_dictionaries.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
