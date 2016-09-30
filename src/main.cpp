@@ -53,7 +53,7 @@ int main()
 	std::vector< cv::Mat > all_imgs;
 	cv::Mat frame;
 
-	for (;;) {
+	for (int i = 0; ; ++i) {
 		cap >> frame;
 
 		std::vector< int > ids;
@@ -69,7 +69,7 @@ int main()
 				vis, corners, ids, cv::Scalar(0, 255, 255));
 		}
 		cv::putText(vis,
-			"Press 'c' to add current frame. 'ESC' to finish and calibrate",
+			"Press 'ESC' to finish and calibrate",
 			cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.4,
 			cv::Scalar(255, 255, 0), 1, cv::LINE_AA);
 		cv::imshow("vis", vis);
@@ -78,7 +78,7 @@ int main()
 		if (key == 27) {
 			break;
 		}
-		else if (key == 'c' && ids.size() > 0) {
+		else if (i % 10 == 0 && ids.size() > 0) {
 			all_corners.push_back(corners);
 			all_ids.push_back(ids);
 			all_imgs.push_back(frame);
@@ -157,10 +157,8 @@ int main()
 	fs << "camera_matrix" << cameraMatrix;
 	fs << "distortion_coefficients" << distCoeffs;
 	fs << "avg_reprojection_error" << repError;
-
-
+	
 	std::cout << "Rep Error: " << repError << std::endl;
-	std::cout << "Rep Error Aruco: " << arucoRepErr << std::endl;
 	std::cout << "Calibration saved to " << filename << std::endl;
 
 	return 0;
