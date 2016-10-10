@@ -160,6 +160,87 @@ bool calibrate(
 }
 
 
+bool estimate(
+	const cv::Mat & camera_matrix, 
+	const cv::Mat & dist_coeffs,
+	const cv::Size frame_size = cv::Size(1280, 720),
+	const int frame_margin = 10,
+	const float aspect_ratio = 1.0f,
+	const int board_pad = 10,
+	const int squares_x = 5,
+	const int squares_y = 8,
+	const float square_length = 0.04f,
+	const float marker_length = 0.02f,
+	const int dictionary_id = cv::aruco::DICT_6X6_250)
+{
+	float axisLength = 0.5f * (std::min(squares_x, squares_y) * (square_length));
+
+	// ------------------------------------------------------------------------
+	// make board
+
+	cv::Ptr<cv::aruco::Dictionary> dictionary =
+		cv::aruco::getPredefinedDictionary(
+		cv::aruco::PREDEFINED_DICTIONARY_NAME(dictionary_id));
+
+	cv::Ptr<cv::aruco::CharucoBoard> ch_board =
+		cv::aruco::CharucoBoard::create(
+		squares_x, squares_y, square_length, marker_length, dictionary);
+	cv::Ptr<cv::aruco::Board> board = ch_board.staticCast<cv::aruco::Board>();
+
+	// ------------------------------------------------------------------------
+	// setup camera
+
+	cv::VideoCapture cap(1);
+	cap.set(CV_CAP_PROP_FRAME_WIDTH, frame_size.width);
+	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frame_size.height);
+	if (!cap.isOpened())
+		return false;
+
+	// ------------------------------------------------------------------------
+	// main loop
+
+	cv::Mat frame;
+
+	for (int i = 0, prev_i = -frame_margin;; ++i) {
+		cap >> frame;
+
+		std::vector< int > ids, charucoIds;
+		std::vector< std::vector< cv::Point2f > > corners, rejected;
+		std::vector< cv::Point2f > charucoCorners;
+		cv::aruco::detectMarkers(frame, dictionary, corners, ids,
+			cv::aruco::DetectorParameters::create(), rejected);
+		cv::aruco::refineDetectedMarkers(frame, board, corners, ids, rejected);
+
+		int num_corners = 0;
+		if (ids.size() > 0)
+			num_corners = cv::aruco::interpolateCornersCharuco(
+			corners, ids, frame, ch_board, charucoCorners,
+			charucoIds, camera_matrix, dist_coeffs);
+
+		cv::Vec3d rvec, tvec;
+		bool validPose = false;
+		if (camera_matrix.total() != 0) {
+			validPose = cv::aruco::estimatePoseCharucoBoard(
+				charucoCorners, charucoIds, ch_board,
+				camera_matrix, dist_coeffs, rvec, tvec);
+		}
+
+		cv::Mat vis;
+		frame.copyTo(vis);
+		if (num_corners > 0)
+			cv::aruco::drawDetectedCornersCharuco(
+				vis, charucoCorners, charucoIds, cv::Scalar(0, 255, 255));
+		if (validPose)
+			cv::aruco::drawAxis(
+			vis, camera_matrix, dist_coeffs, rvec, tvec, axisLength);
+		cv::imshow("vis", vis);
+		cv::waitKey(10);
+	}
+
+	return true;
+}
+
+
 int main()
 {
 	std::string filename = "camera.yml";
@@ -175,21 +256,16 @@ int main()
 		std::cerr << "Cannot open calibration file" << std::endl;
 		return -1;
 	}
-
 	cv::Size frame_size;
 	cv::Mat camera_matrix, dist_coeffs;
-	double rep_error;
-	fs["image_width"] >> frame_size.width;
-	fs["image_height"] >> frame_size.height;
 	fs["camera_matrix"] >> camera_matrix;
 	fs["distortion_coefficients"] >> dist_coeffs;
-	fs["avg_reprojection_error"] >> rep_error;
 	fs.release();
 
-	std::cout << "frame_size: " << frame_size << std::endl;
 	std::cout << "camera_matrix: " << camera_matrix << std::endl;
 	std::cout << "dist_coeffs: " << dist_coeffs << std::endl;
-	std::cout << "Rep Error: " << rep_error << std::endl;
+
+	estimate(camera_matrix, dist_coeffs);
 
 	return 0;
 }
