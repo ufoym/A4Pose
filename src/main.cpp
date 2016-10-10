@@ -2,22 +2,18 @@
 #include "charuco.hpp"
 
 
-int main()
+bool calibrate(
+	const std::string filename,
+	const cv::Size frame_size = cv::Size(1280, 720),
+	const int frame_margin = 10,
+	const float aspect_ratio = 1.0f,
+	const int board_pad = 10,
+	const int squares_x = 5,
+	const int squares_y = 8,
+	const float square_length = 0.04f,
+	const float marker_length = 0.02f,
+	const int dictionary_id = cv::aruco::DICT_6X6_250)
 {
-	// ------------------------------------------------------------------------
-	// settings
-
-	cv::Size frame_size(1280, 720);
-	const int frame_margin = 10;
-	const float aspect_ratio = 1.0f;
-	const int board_pad = 100;
-	const int squares_x = 5;
-	const int squares_y = 8;
-	const float square_length = 0.04f;
-	const float marker_length = 0.02f;
-	const int dictionary_id = cv::aruco::DICT_6X6_250;
-	const std::string filename = "camera.yml";
-
 	// ------------------------------------------------------------------------
 	// make board
 
@@ -27,7 +23,7 @@ int main()
 
 	cv::Ptr<cv::aruco::CharucoBoard> ch_board =
 		cv::aruco::CharucoBoard::create(
-		squares_x, squares_y, square_length, marker_length, dictionary); 
+		squares_x, squares_y, square_length, marker_length, dictionary);
 	cv::Ptr<cv::aruco::Board> board = ch_board.staticCast<cv::aruco::Board>();
 
 	// ------------------------------------------------------------------------
@@ -44,7 +40,7 @@ int main()
 	cap.set(CV_CAP_PROP_FRAME_WIDTH, frame_size.width);
 	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frame_size.height);
 	if (!cap.isOpened())
-		return -1;
+		return false;
 
 	// ------------------------------------------------------------------------
 	// main loop
@@ -93,11 +89,11 @@ int main()
 
 	if (all_ids.size() < 1) {
 		std::cerr << "Not enough captures for calibration" << std::endl;
-		return 0;
+		return false;
 	}
-	cv::Mat cameraMatrix, distCoeffs;
-	std::vector< cv::Mat > rvecs, tvecs; 
-	
+	cv::Mat camera_matrix, dist_coeffs;
+	std::vector< cv::Mat > rvecs, tvecs;
+
 	// prepare data for calibration
 	std::vector< std::vector< cv::Point2f > > allCornersConcatenated;
 	std::vector< int > allIdsConcatenated;
@@ -113,8 +109,8 @@ int main()
 
 	double arucoRepErr = cv::aruco::calibrateCameraAruco(
 		allCornersConcatenated, allIdsConcatenated,
-		markerCounterPerFrame, board, frame_size, 
-		cameraMatrix, distCoeffs);
+		markerCounterPerFrame, board, frame_size,
+		camera_matrix, dist_coeffs);
 
 	int nFrames = (int)all_corners.size();
 	std::vector< cv::Mat > allCharucoCorners;
@@ -127,9 +123,9 @@ int main()
 		cv::Mat currentCharucoCorners, currentCharucoIds;
 		cv::aruco::interpolateCornersCharuco(
 			all_corners[i], all_ids[i], all_imgs[i], ch_board,
-			currentCharucoCorners, currentCharucoIds, 
-			cameraMatrix, distCoeffs);
-		
+			currentCharucoCorners, currentCharucoIds,
+			camera_matrix, dist_coeffs);
+
 		const int num = currentCharucoCorners.size().height;
 		if (num > 4) {
 			allCharucoCorners.push_back(currentCharucoCorners);
@@ -139,29 +135,61 @@ int main()
 
 	if (allCharucoCorners.size() < 4) {
 		std::cerr << "Not enough corners for calibration" << std::endl;
-		return 0;
+		return false;
 	}
 
-	double repError = cv::aruco::calibrateCameraCharuco(
+	double rep_error = cv::aruco::calibrateCameraCharuco(
 		allCharucoCorners, allCharucoIds, ch_board, frame_size,
-		cameraMatrix, distCoeffs, rvecs, tvecs, 0);
-	
+		camera_matrix, dist_coeffs, rvecs, tvecs, 0);
+
 	// ------------------------------------------------------------------------
 	// save camera parameters
 
 	cv::FileStorage fs(filename, cv::FileStorage::WRITE);
 	if (!fs.isOpened()) {
 		std::cerr << "Cannot save output file" << std::endl;
-		return 0;
+		return false;
 	}
 	fs << "image_width" << frame_size.width;
 	fs << "image_height" << frame_size.height;
-	fs << "camera_matrix" << cameraMatrix;
-	fs << "distortion_coefficients" << distCoeffs;
-	fs << "avg_reprojection_error" << repError;
-	
-	std::cout << "Rep Error: " << repError << std::endl;
-	std::cout << "Calibration saved to " << filename << std::endl;
+	fs << "camera_matrix" << camera_matrix;
+	fs << "distortion_coefficients" << dist_coeffs;
+	fs << "avg_reprojection_error" << rep_error;
+	fs.release();
+	return true;
+}
+
+
+int main()
+{
+	std::string filename = "camera.yml";
+	if (!std::ifstream(filename.c_str()).good()) {
+		if (!calibrate(filename)) {
+			std::cerr << "Cannot calibrate the camera" << std::endl;
+			return -1;
+		}
+	}
+
+	cv::FileStorage fs(filename, cv::FileStorage::READ);
+	if (!fs.isOpened()) {
+		std::cerr << "Cannot open calibration file" << std::endl;
+		return -1;
+	}
+
+	cv::Size frame_size;
+	cv::Mat camera_matrix, dist_coeffs;
+	double rep_error;
+	fs["image_width"] >> frame_size.width;
+	fs["image_height"] >> frame_size.height;
+	fs["camera_matrix"] >> camera_matrix;
+	fs["distortion_coefficients"] >> dist_coeffs;
+	fs["avg_reprojection_error"] >> rep_error;
+	fs.release();
+
+	std::cout << "frame_size: " << frame_size << std::endl;
+	std::cout << "camera_matrix: " << camera_matrix << std::endl;
+	std::cout << "dist_coeffs: " << dist_coeffs << std::endl;
+	std::cout << "Rep Error: " << rep_error << std::endl;
 
 	return 0;
 }
