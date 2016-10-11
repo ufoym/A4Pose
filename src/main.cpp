@@ -2441,7 +2441,6 @@ bool estimate(
 	const cv::Mat & camera_matrix, 
 	const cv::Mat & dist_coeffs,
 	const cv::Size frame_size = cv::Size(1280, 720),
-	const int frame_margin = 10,
 	const float aspect_ratio = 1.0f,
 	const int board_pad = 10,
 	const int squares_x = 5,
@@ -2473,7 +2472,7 @@ bool estimate(
 
 	cv::Mat frame;
 
-	for (int i = 0, prev_i = -frame_margin;; ++i) {
+	for (int i = 0;; ++i) {
 		 cap >> frame;
 
 		std::vector< int > ids, charucoIds;
@@ -2506,7 +2505,11 @@ bool estimate(
 			drawAxis(
 			vis, camera_matrix, dist_coeffs, rvec, tvec, axisLength);
 		cv::imshow("vis", vis);
-		cv::waitKey(10);
+
+		const char key = cv::waitKey(30);
+		if (key == 27) {
+			break;
+		}
 	}
 
 	return true;
