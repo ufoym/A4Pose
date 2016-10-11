@@ -843,15 +843,6 @@ private:
 	const cv::Ptr<DetectorParameters> &params;
 };
 
-static void _convertToGrey(cv::InputArray _in, cv::OutputArray _out) {
-	CV_Assert(_in.getMat().channels() == 1 || _in.getMat().channels() == 3);
-	_out.create(_in.getMat().size(), CV_8UC1);
-	if (_in.getMat().type() == CV_8UC3)
-		cvtColor(_in.getMat(), _out.getMat(), cv::COLOR_BGR2GRAY);
-	else
-		_in.getMat().copyTo(_out);
-}
-
 static void _detectInitialCandidates(
 	const cv::Mat &grey,
 	std::vector< std::vector< cv::Point2f > > &candidates,
@@ -956,14 +947,11 @@ static void _filterTooCloseCandidates(
 	}
 }
 
-static void _detectCandidates(cv::InputArray _image, cv::OutputArrayOfArrays _candidates,
+static void _detectCandidates(cv::InputArray _grey, cv::OutputArrayOfArrays _candidates,
 	cv::OutputArrayOfArrays _contours, const cv::Ptr<DetectorParameters> &_params) {
 
-	cv::Mat image = _image.getMat();
-	CV_Assert(image.total() != 0);
-
-	cv::Mat grey;
-	_convertToGrey(image, grey);
+	cv::Mat grey = _grey.getMat();
+	CV_Assert(grey.total() != 0);
 
 	std::vector< std::vector< cv::Point2f > > candidates;
 	std::vector< std::vector< cv::Point > > contours;
@@ -1025,7 +1013,7 @@ void _copyVector2Output(std::vector< cv::Mat > &vec, cv::OutputArrayOfArrays out
 }
 
 static void _identifyCandidates(
-	cv::InputArray _image,
+	cv::InputArray _grey,
 	cv::InputArrayOfArrays _candidates,
 	cv::InputArrayOfArrays _contours,
 	cv::Ptr<Dictionary> &_dictionary,
@@ -1040,10 +1028,8 @@ static void _identifyCandidates(
 	std::vector< cv::Mat > rejected;
 	std::vector< int > ids;
 
-	CV_Assert(_image.getMat().total() != 0);
-
-	cv::Mat grey;
-	_convertToGrey(_image.getMat(), grey);
+	cv::Mat grey = _grey.getMat();
+	CV_Assert(grey.total() != 0);
 
 	std::vector< int > idsTmp(ncandidates, -1);
 	std::vector< char > validCandidates(ncandidates, 0);
@@ -1153,7 +1139,7 @@ void detectMarkers(
 	CV_Assert(_image.getMat().total() != 0);
 
 	cv::Mat grey;
-	_convertToGrey(_image.getMat(), grey);
+	cv::cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
 
 	std::vector< std::vector< cv::Point2f > > candidates;
 	std::vector< std::vector< cv::Point > > contours;
@@ -1400,7 +1386,7 @@ void refineDetectedMarkers(
 		int(double(dictionary.maxCorrectionBits) * errorCorrectionRate);
 
 	cv::Mat grey;
-	_convertToGrey(_image, grey);
+	cv::cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
 
 	std::vector< cv::Mat > finalAcceptedCorners;
 	std::vector< int > finalAcceptedIds;
