@@ -149,17 +149,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\aruco.cpp" />
-    <ClCompile Include="..\src\charuco.cpp" />
-    <ClCompile Include="..\src\dictionary.cpp" />
     <ClCompile Include="..\src\main.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\src\aruco.hpp" />
-    <ClInclude Include="..\src\charuco.hpp" />
-    <ClInclude Include="..\src\dictionary.hpp" />
-    <ClInclude Include="..\src\precomp.hpp" />
-    <ClInclude Include="..\src\predefined_dictionaries.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
