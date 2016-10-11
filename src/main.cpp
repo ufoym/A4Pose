@@ -267,21 +267,21 @@ public:
 	}
 };
 
-class CharucoBoard : public Board {
+class ChBoard : public Board {
 
 public:
 	std::vector< cv::Point3f > chessboardCorners;
 	std::vector< std::vector< int > > nearestMarkerIdx;
 	std::vector< std::vector< int > > nearestMarkerCorners;
 
-	static cv::Ptr<CharucoBoard> create(
+	static cv::Ptr<ChBoard> create(
 		int squaresX, int squaresY,
 		float squareLength,
 		float markerLength,
 		cv::Ptr<Dictionary> &dictionary)
 	{
 		CV_Assert(squaresX > 1 && squaresY > 1 && markerLength > 0 && squareLength > markerLength);
-		cv::Ptr<CharucoBoard> res = cv::makePtr<CharucoBoard>();
+		cv::Ptr<ChBoard> res = cv::makePtr<ChBoard>();
 
 		res->_squaresX = squaresX;
 		res->_squaresY = squaresY;
@@ -390,17 +390,17 @@ private:
 		nearestMarkerCorners.resize(chessboardCorners.size());
 
 		unsigned int nMarkers = (unsigned int)ids.size();
-		unsigned int nCharucoCorners = (unsigned int)chessboardCorners.size();
-		for (unsigned int i = 0; i < nCharucoCorners; i++) {
+		unsigned int nChCorners = (unsigned int)chessboardCorners.size();
+		for (unsigned int i = 0; i < nChCorners; i++) {
 			double minDist = -1;
-			cv::Point3f charucoCorner = chessboardCorners[i];
+			cv::Point3f chCorner = chessboardCorners[i];
 			for (unsigned int j = 0; j < nMarkers; j++) {
 				cv::Point3f center = cv::Point3f(0, 0, 0);
 				for (unsigned int k = 0; k < 4; k++)
 					center += objPoints[j][k];
 				center /= 4.;
 				double sqDistance;
-				cv::Point3f distVector = charucoCorner - center;
+				cv::Point3f distVector = chCorner - center;
 				sqDistance = distVector.x * distVector.x + distVector.y * distVector.y;
 				if (j == 0 || fabs(sqDistance - minDist) < 0.0001) {
 					nearestMarkerIdx[i].push_back(j);
@@ -417,7 +417,7 @@ private:
 				double minDistCorner = -1;
 				for (unsigned int k = 0; k < 4; k++) {
 					double sqDistance;
-					cv::Point3f distVector = charucoCorner - objPoints[nearestMarkerIdx[i][j]][k];
+					cv::Point3f distVector = chCorner - objPoints[nearestMarkerIdx[i][j]][k];
 					sqDistance = distVector.x * distVector.x + distVector.y * distVector.y;
 					if (k == 0 || sqDistance < minDistCorner) {
 						minDistCorner = sqDistance;
@@ -804,9 +804,9 @@ private:
 	const cv::Ptr<DetectorParameters> &params;
 };
 
-class CharucoSubpixelParallel : public cv::ParallelLoopBody {
+class ChSubpixelParallel : public cv::ParallelLoopBody {
 public:
-	CharucoSubpixelParallel(
+	ChSubpixelParallel(
 		const cv::Mat *_grey,
 		std::vector< cv::Point2f > *_filteredChessboardImgPoints,
 		std::vector< cv::Size > *_filteredWinSizes,
@@ -835,7 +835,7 @@ public:
 	}
 
 private:
-	CharucoSubpixelParallel &operator=(const CharucoSubpixelParallel &);
+	ChSubpixelParallel &operator=(const ChSubpixelParallel &);
 
 	const cv::Mat *grey;
 	std::vector< cv::Point2f > *filteredChessboardImgPoints;
@@ -1657,15 +1657,15 @@ double calibrateCameraAruco(
 static void _getMaximumSubPixWindowSizes(
 	cv::InputArrayOfArrays markerCorners,
 	cv::InputArray markerIds,
-	cv::InputArray charucoCorners,
-	cv::Ptr<CharucoBoard> &board,
+	cv::InputArray chCorners,
+	cv::Ptr<ChBoard> &board,
 	std::vector< cv::Size > &sizes) {
 
-	unsigned int nCharucoCorners = (unsigned int)charucoCorners.getMat().total();
-	sizes.resize(nCharucoCorners, cv::Size(-1, -1));
+	unsigned int nChCorners = (unsigned int)chCorners.getMat().total();
+	sizes.resize(nChCorners, cv::Size(-1, -1));
 
-	for (unsigned int i = 0; i < nCharucoCorners; i++) {
-		if (charucoCorners.getMat().at< cv::Point2f >(i) == cv::Point2f(-1, -1)) continue;
+	for (unsigned int i = 0; i < nChCorners; i++) {
+		if (chCorners.getMat().at< cv::Point2f >(i) == cv::Point2f(-1, -1)) continue;
 		if (board->nearestMarkerIdx[i].size() == 0) continue;
 
 		double minDist = -1;
@@ -1684,8 +1684,8 @@ static void _getMaximumSubPixWindowSizes(
 			if (markerIdx == -1) continue;
 			cv::Point2f markerCorner =
 				markerCorners.getMat(markerIdx).at< cv::Point2f >(board->nearestMarkerCorners[i][j]);
-			cv::Point2f charucoCorner = charucoCorners.getMat().at< cv::Point2f >(i);
-			double dist = norm(markerCorner - charucoCorner);
+			cv::Point2f chCorner = chCorners.getMat().at< cv::Point2f >(i);
+			double dist = norm(markerCorner - chCorner);
 			if (minDist == -1) minDist = dist;
 			minDist = std::min(dist, minDist);
 			counter++;
@@ -1704,24 +1704,24 @@ static void _getMaximumSubPixWindowSizes(
 }
 
 static unsigned int _filterCornersWithoutMinMarkers(
-	cv::Ptr<CharucoBoard> &_board,
-	cv::InputArray _allCharucoCorners,
-	cv::InputArray _allCharucoIds,
+	cv::Ptr<ChBoard> &_board,
+	cv::InputArray _allChCorners,
+	cv::InputArray _allChIds,
 	cv::InputArray _allArucoIds, int minMarkers,
-	cv::OutputArray _filteredCharucoCorners,
-	cv::OutputArray _filteredCharucoIds) {
+	cv::OutputArray _filteredChCorners,
+	cv::OutputArray _filteredChIds) {
 
 	CV_Assert(minMarkers >= 0 && minMarkers <= 2);
 
-	std::vector< cv::Point2f > filteredCharucoCorners;
-	std::vector< int > filteredCharucoIds;
+	std::vector< cv::Point2f > filteredChCorners;
+	std::vector< int > filteredChIds;
 
-	for (unsigned int i = 0; i < _allCharucoIds.getMat().total(); i++) {
-		int currentCharucoId = _allCharucoIds.getMat().at< int >(i);
+	for (unsigned int i = 0; i < _allChIds.getMat().total(); i++) {
+		int currentChId = _allChIds.getMat().at< int >(i);
 		int totalMarkers = 0;
 
-		for (unsigned int m = 0; m < _board->nearestMarkerIdx[currentCharucoId].size(); m++) {
-			int markerId = _board->ids[_board->nearestMarkerIdx[currentCharucoId][m]];
+		for (unsigned int m = 0; m < _board->nearestMarkerIdx[currentChId].size(); m++) {
+			int markerId = _board->ids[_board->nearestMarkerIdx[currentChId][m]];
 			bool found = false;
 			for (unsigned int k = 0; k < _allArucoIds.getMat().total(); k++) {
 				if (_allArucoIds.getMat().at< int >(k) == markerId) {
@@ -1733,22 +1733,22 @@ static unsigned int _filterCornersWithoutMinMarkers(
 		}
 
 		if (totalMarkers >= minMarkers) {
-			filteredCharucoIds.push_back(currentCharucoId);
-			filteredCharucoCorners.push_back(_allCharucoCorners.getMat().at< cv::Point2f >(i));
+			filteredChIds.push_back(currentChId);
+			filteredChCorners.push_back(_allChCorners.getMat().at< cv::Point2f >(i));
 		}
 	}
 
-	_filteredCharucoCorners.create((int)filteredCharucoCorners.size(), 1, CV_32FC2);
-	for (unsigned int i = 0; i < filteredCharucoCorners.size(); i++) {
-		_filteredCharucoCorners.getMat().at< cv::Point2f >(i) = filteredCharucoCorners[i];
+	_filteredChCorners.create((int)filteredChCorners.size(), 1, CV_32FC2);
+	for (unsigned int i = 0; i < filteredChCorners.size(); i++) {
+		_filteredChCorners.getMat().at< cv::Point2f >(i) = filteredChCorners[i];
 	}
 
-	_filteredCharucoIds.create((int)filteredCharucoIds.size(), 1, CV_32SC1);
-	for (unsigned int i = 0; i < filteredCharucoIds.size(); i++) {
-		_filteredCharucoIds.getMat().at< int >(i) = filteredCharucoIds[i];
+	_filteredChIds.create((int)filteredChIds.size(), 1, CV_32SC1);
+	for (unsigned int i = 0; i < filteredChIds.size(); i++) {
+		_filteredChIds.getMat().at< int >(i) = filteredChIds[i];
 	}
 
-	return (unsigned int)filteredCharucoCorners.size();
+	return (unsigned int)filteredChCorners.size();
 }
 
 static unsigned int _selectAndRefineChessboardCorners(
@@ -1786,7 +1786,7 @@ static unsigned int _selectAndRefineChessboardCorners(
 
 	cv::parallel_for_(
 		cv::Range(0, (int)filteredChessboardImgPoints.size()),
-		CharucoSubpixelParallel(&grey, &filteredChessboardImgPoints, &filteredWinSizes, params));
+		ChSubpixelParallel(&grey, &filteredChessboardImgPoints, &filteredWinSizes, params));
 
 	_selectedCorners.create((int)filteredChessboardImgPoints.size(), 1, CV_32FC2);
 	for (unsigned int i = 0; i < filteredChessboardImgPoints.size(); i++) {
@@ -1801,15 +1801,15 @@ static unsigned int _selectAndRefineChessboardCorners(
 	return (unsigned int)filteredChessboardImgPoints.size();
 }
 
-static int _interpolateCornersCharucoApproxCalib(
+static int _interpolateCornersChApproxCalib(
 	cv::InputArrayOfArrays _markerCorners,
 	cv::InputArray _markerIds,
 	cv::InputArray _image,
-	cv::Ptr<CharucoBoard> &_board,
+	cv::Ptr<ChBoard> &_board,
 	cv::InputArray _cameraMatrix,
 	cv::InputArray _distCoeffs,
-	cv::OutputArray _charucoCorners,
-	cv::OutputArray _charucoIds) {
+	cv::OutputArray _chCorners,
+	cv::OutputArray _chIds) {
 
 	CV_Assert(_image.getMat().channels() == 1 || _image.getMat().channels() == 3);
 	CV_Assert(_markerCorners.total() == _markerIds.getMat().total() &&
@@ -1835,21 +1835,21 @@ static int _interpolateCornersCharucoApproxCalib(
 
 	unsigned int nRefinedCorners;
 	nRefinedCorners = _selectAndRefineChessboardCorners(
-		allChessboardImgPoints, _image, _charucoCorners, _charucoIds, subPixWinSizes);
+		allChessboardImgPoints, _image, _chCorners, _chIds, subPixWinSizes);
 
-	nRefinedCorners = _filterCornersWithoutMinMarkers(_board, _charucoCorners, _charucoIds,
-		_markerIds, 2, _charucoCorners, _charucoIds);
+	nRefinedCorners = _filterCornersWithoutMinMarkers(_board, _chCorners, _chIds,
+		_markerIds, 2, _chCorners, _chIds);
 
 	return nRefinedCorners;
 }
 
-static int _interpolateCornersCharucoLocalHom(
+static int _interpolateCornersChLocalHom(
 	cv::InputArrayOfArrays _markerCorners,
 	cv::InputArray _markerIds,
 	cv::InputArray _image,
-	cv::Ptr<CharucoBoard> &_board,
-	cv::OutputArray _charucoCorners,
-	cv::OutputArray _charucoIds) {
+	cv::Ptr<ChBoard> &_board,
+	cv::OutputArray _chCorners,
+	cv::OutputArray _chIds) {
 
 	CV_Assert(_image.getMat().channels() == 1 || _image.getMat().channels() == 3);
 	CV_Assert(_markerCorners.total() == _markerIds.getMat().total() &&
@@ -1873,10 +1873,10 @@ static int _interpolateCornersCharucoLocalHom(
 		transformations[i] = getPerspectiveTransform(markerObjPoints2D, _markerCorners.getMat(i));
 	}
 
-	unsigned int nCharucoCorners = (unsigned int)_board->chessboardCorners.size();
-	std::vector< cv::Point2f > allChessboardImgPoints(nCharucoCorners, cv::Point2f(-1, -1));
+	unsigned int nChCorners = (unsigned int)_board->chessboardCorners.size();
+	std::vector< cv::Point2f > allChessboardImgPoints(nChCorners, cv::Point2f(-1, -1));
 
-	for (unsigned int i = 0; i < nCharucoCorners; i++) {
+	for (unsigned int i = 0; i < nChCorners; i++) {
 		cv::Point2f objPoint2D = cv::Point2f(_board->chessboardCorners[i].x, _board->chessboardCorners[i].y);
 
 		std::vector< cv::Point2f > interpolatedPositions;
@@ -1912,55 +1912,55 @@ static int _interpolateCornersCharucoLocalHom(
 
 	unsigned int nRefinedCorners;
 	nRefinedCorners = _selectAndRefineChessboardCorners(
-		allChessboardImgPoints, _image, _charucoCorners, _charucoIds, subPixWinSizes);
+		allChessboardImgPoints, _image, _chCorners, _chIds, subPixWinSizes);
 
-	nRefinedCorners = _filterCornersWithoutMinMarkers(_board, _charucoCorners, _charucoIds,
-		_markerIds, 2, _charucoCorners, _charucoIds);
+	nRefinedCorners = _filterCornersWithoutMinMarkers(_board, _chCorners, _chIds,
+		_markerIds, 2, _chCorners, _chIds);
 
 	return nRefinedCorners;
 }
 
-int interpolateCornersCharuco(
+int interpolateCornersCh(
 	cv::InputArrayOfArrays _markerCorners,
 	cv::InputArray _markerIds,
 	cv::InputArray _image,
-	cv::Ptr<CharucoBoard> &_board,
-	cv::OutputArray _charucoCorners,
-	cv::OutputArray _charucoIds,
+	cv::Ptr<ChBoard> &_board,
+	cv::OutputArray _chCorners,
+	cv::OutputArray _chIds,
 	cv::InputArray _cameraMatrix,
 	cv::InputArray _distCoeffs) {
 
 	if (_cameraMatrix.total() != 0) {
-		return _interpolateCornersCharucoApproxCalib(_markerCorners, _markerIds, _image, _board,
-			_cameraMatrix, _distCoeffs, _charucoCorners,
-			_charucoIds);
+		return _interpolateCornersChApproxCalib(_markerCorners, _markerIds, _image, _board,
+			_cameraMatrix, _distCoeffs, _chCorners,
+			_chIds);
 	}
 
 	else {
-		return _interpolateCornersCharucoLocalHom(_markerCorners, _markerIds, _image, _board,
-			_charucoCorners, _charucoIds);
+		return _interpolateCornersChLocalHom(_markerCorners, _markerIds, _image, _board,
+			_chCorners, _chIds);
 	}
 }
 
-void drawDetectedCornersCharuco(
+void drawDetectedCornersCh(
 	cv::InputOutputArray _image,
-	cv::InputArray _charucoCorners,
-	cv::InputArray _charucoIds,
+	cv::InputArray _chCorners,
+	cv::InputArray _chIds,
 	cv::Scalar cornerColor) {
 
 	CV_Assert(_image.getMat().total() != 0 &&
 		(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
-	CV_Assert((_charucoCorners.getMat().total() == _charucoIds.getMat().total()) ||
-		_charucoIds.getMat().total() == 0);
+	CV_Assert((_chCorners.getMat().total() == _chIds.getMat().total()) ||
+		_chIds.getMat().total() == 0);
 
-	unsigned int nCorners = (unsigned int)_charucoCorners.getMat().total();
+	unsigned int nCorners = (unsigned int)_chCorners.getMat().total();
 	for (unsigned int i = 0; i < nCorners; i++) {
-		cv::Point2f corner = _charucoCorners.getMat().at< cv::Point2f >(i);
+		cv::Point2f corner = _chCorners.getMat().at< cv::Point2f >(i);
 
 		cv::rectangle(_image, corner - cv::Point2f(3, 3), corner + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
 
-		if (_charucoIds.total() != 0) {
-			int id = _charucoIds.getMat().at< int >(i);
+		if (_chIds.total() != 0) {
+			int id = _chIds.getMat().at< int >(i);
 			std::stringstream s;
 			s << "id=" << id;
 			cv::putText(_image, s.str(), corner + cv::Point2f(5, -5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
@@ -1969,10 +1969,10 @@ void drawDetectedCornersCharuco(
 	}
 }
 
-double calibrateCameraCharuco(
-	cv::InputArrayOfArrays _charucoCorners,
-	cv::InputArrayOfArrays _charucoIds,
-	cv::Ptr<CharucoBoard> &_board,
+double calibrateCameraCh(
+	cv::InputArrayOfArrays _chCorners,
+	cv::InputArrayOfArrays _chIds,
+	cv::Ptr<ChBoard> &_board,
 	cv::Size imageSize,
 	cv::InputOutputArray _cameraMatrix,
 	cv::InputOutputArray _distCoeffs,
@@ -1981,23 +1981,23 @@ double calibrateCameraCharuco(
 	int flags = 0,
 	cv::TermCriteria criteria = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON)) {
 
-	CV_Assert(_charucoIds.total() > 0 && (_charucoIds.total() == _charucoCorners.total()));
+	CV_Assert(_chIds.total() > 0 && (_chIds.total() == _chCorners.total()));
 
 	std::vector< std::vector< cv::Point3f > > allObjPoints;
-	allObjPoints.resize(_charucoIds.total());
-	for (unsigned int i = 0; i < _charucoIds.total(); i++) {
-		unsigned int nCorners = (unsigned int)_charucoIds.getMat(i).total();
-		CV_Assert(nCorners > 0 && nCorners == _charucoCorners.getMat(i).total());
+	allObjPoints.resize(_chIds.total());
+	for (unsigned int i = 0; i < _chIds.total(); i++) {
+		unsigned int nCorners = (unsigned int)_chIds.getMat(i).total();
+		CV_Assert(nCorners > 0 && nCorners == _chCorners.getMat(i).total());
 		allObjPoints[i].reserve(nCorners);
 
 		for (unsigned int j = 0; j < nCorners; j++) {
-			int pointId = _charucoIds.getMat(i).at< int >(j);
+			int pointId = _chIds.getMat(i).at< int >(j);
 			CV_Assert(pointId >= 0 && pointId < (int)_board->chessboardCorners.size());
 			allObjPoints[i].push_back(_board->chessboardCorners[pointId]);
 		}
 	}
 
-	return calibrateCamera(allObjPoints, _charucoCorners, imageSize, _cameraMatrix, _distCoeffs,
+	return calibrateCamera(allObjPoints, _chCorners, imageSize, _cameraMatrix, _distCoeffs,
 		_rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
 }
 
@@ -2032,78 +2032,77 @@ static bool _arePointsEnoughForPoseEstimation(const std::vector< cv::Point3f > &
 		return false;
 }
 
-bool estimatePoseCharucoBoard(
-	cv::InputArray _charucoCorners,
-	cv::InputArray _charucoIds,
-	cv::Ptr<CharucoBoard> &_board,
+bool estimatePoseChBoard(
+	cv::InputArray _chCorners,
+	cv::InputArray _chIds,
+	cv::Ptr<ChBoard> &_board,
 	cv::InputArray _cameraMatrix,
 	cv::InputArray _distCoeffs,
 	cv::OutputArray _rvec,
 	cv::OutputArray _tvec) {
 
-	CV_Assert((_charucoCorners.getMat().total() == _charucoIds.getMat().total()));
+	CV_Assert((_chCorners.getMat().total() == _chIds.getMat().total()));
 
-	if (_charucoIds.getMat().total() < 4) return false;
+	if (_chIds.getMat().total() < 4) return false;
 
 	std::vector< cv::Point3f > objPoints;
-	objPoints.reserve(_charucoIds.getMat().total());
-	for (unsigned int i = 0; i < _charucoIds.getMat().total(); i++) {
-		int currId = _charucoIds.getMat().at< int >(i);
+	objPoints.reserve(_chIds.getMat().total());
+	for (unsigned int i = 0; i < _chIds.getMat().total(); i++) {
+		int currId = _chIds.getMat().at< int >(i);
 		CV_Assert(currId >= 0 && currId < (int)_board->chessboardCorners.size());
 		objPoints.push_back(_board->chessboardCorners[currId]);
 	}
 
 	if (!_arePointsEnoughForPoseEstimation(objPoints)) return false;
 
-	cv::solvePnP(objPoints, _charucoCorners, _cameraMatrix, _distCoeffs, _rvec, _tvec);
+	cv::solvePnP(objPoints, _chCorners, _cameraMatrix, _distCoeffs, _rvec, _tvec);
 
 	return true;
 }
 
 bool calibrate(
 	const std::string filename,
-	const cv::Size frame_size = cv::Size(1280, 720),
-	const int frame_margin = 10,
-	const float aspect_ratio = 1.0f,
-	const int board_pad = 10,
-	const int squares_x = 5,
-	const int squares_y = 8,
-	const float square_length = 0.04f,
-	const float marker_length = 0.02f)
+	const cv::Size frameSize = cv::Size(1280, 720),
+	const int frameMargin = 10,
+	const int boardPad = 10,
+	const int squaresX = 5,
+	const int squaresY = 8,
+	const float squareLength = 0.04f,
+	const float markerLength = 0.02f)
 {
 	// ------------------------------------------------------------------------
 	// make board
 
 	cv::Ptr<Dictionary> dictionary = Dictionary::create();
-	cv::Ptr<CharucoBoard> ch_board = CharucoBoard::create(
-		squares_x, squares_y, square_length, marker_length, dictionary);
-	cv::Ptr<Board> board = ch_board.staticCast<Board>();
+	cv::Ptr<ChBoard> chBoard = ChBoard::create(
+		squaresX, squaresY, squareLength, markerLength, dictionary);
+	cv::Ptr<Board> board = chBoard.staticCast<Board>();
 
 	// ------------------------------------------------------------------------
 	// make board image for print
 
-	cv::Mat board_img;
-	ch_board->draw(cv::Size(2480, 3508), board_img, board_pad);
-	cv::imwrite("board.png", board_img);
+	cv::Mat boardImg;
+	chBoard->draw(cv::Size(2480, 3508), boardImg, boardPad);
+	cv::imwrite("board.png", boardImg);
 
 	// ------------------------------------------------------------------------
 	// setup camera
 
 	cv::VideoCapture cap(1);
-	cap.set(CV_CAP_PROP_FRAME_WIDTH, frame_size.width);
-	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frame_size.height);
+	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
+	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frameSize.height);
 	if (!cap.isOpened())
 		return false;
 
 	// ------------------------------------------------------------------------
 	// main loop
 
-	std::vector< std::vector< std::vector<cv::Point2f> > > all_corners;
-	std::vector< std::vector<int> > all_ids;
-	std::vector< cv::Mat > all_imgs;
+	std::vector< std::vector< std::vector<cv::Point2f> > > allCorners;
+	std::vector< std::vector<int> > allIds;
+	std::vector< cv::Mat > allImgs;
 	cv::Mat frame;
 
-	for (int i = 0, prev_i = -frame_margin;; ++i) {
+	for (int i = 0, prev_i = -frameMargin;; ++i) {
 		cap >> frame;
 
 		std::vector< int > ids;
@@ -2128,72 +2127,72 @@ bool calibrate(
 		if (key == 27) {
 			break;
 		}
-		else if (ids.size() > 0 && i - prev_i >= frame_margin) {
-			all_corners.push_back(corners);
-			all_ids.push_back(ids);
-			all_imgs.push_back(frame);
+		else if (ids.size() > 0 && i - prev_i >= frameMargin) {
+			allCorners.push_back(corners);
+			allIds.push_back(ids);
+			allImgs.push_back(frame);
 			prev_i = i;
-			std::cout << "Frame captured #" << all_imgs.size() << std::endl;
+			std::cout << "Frame captured #" << allImgs.size() << std::endl;
 		}
 	}
 
 	// ------------------------------------------------------------------------
 	// camera calibration
 
-	if (all_ids.size() < 1) {
+	if (allIds.size() < 1) {
 		std::cerr << "Not enough captures for calibration" << std::endl;
 		return false;
 	}
-	cv::Mat camera_matrix, dist_coeffs;
+	cv::Mat cameraMatrix, distCoeffs;
 	std::vector< cv::Mat > rvecs, tvecs;
 
 	// prepare data for calibration
 	std::vector< std::vector< cv::Point2f > > allCornersConcatenated;
 	std::vector< int > allIdsConcatenated;
 	std::vector< int > markerCounterPerFrame;
-	markerCounterPerFrame.reserve(all_corners.size());
-	for (unsigned int i = 0; i < all_corners.size(); i++) {
-		markerCounterPerFrame.push_back((int)all_corners[i].size());
-		for (unsigned int j = 0; j < all_corners[i].size(); j++) {
-			allCornersConcatenated.push_back(all_corners[i][j]);
-			allIdsConcatenated.push_back(all_ids[i][j]);
+	markerCounterPerFrame.reserve(allCorners.size());
+	for (unsigned int i = 0; i < allCorners.size(); i++) {
+		markerCounterPerFrame.push_back((int)allCorners[i].size());
+		for (unsigned int j = 0; j < allCorners[i].size(); j++) {
+			allCornersConcatenated.push_back(allCorners[i][j]);
+			allIdsConcatenated.push_back(allIds[i][j]);
 		}
 	}
 
 	double arucoRepErr = calibrateCameraAruco(
 		allCornersConcatenated, allIdsConcatenated,
-		markerCounterPerFrame, board, frame_size,
-		camera_matrix, dist_coeffs);
+		markerCounterPerFrame, board, frameSize,
+		cameraMatrix, distCoeffs);
 
-	int nFrames = (int)all_corners.size();
-	std::vector< cv::Mat > allCharucoCorners;
-	std::vector< cv::Mat > allCharucoIds;
-	allCharucoCorners.reserve(nFrames);
-	allCharucoIds.reserve(nFrames);
+	int nFrames = (int)allCorners.size();
+	std::vector< cv::Mat > allChCorners;
+	std::vector< cv::Mat > allChIds;
+	allChCorners.reserve(nFrames);
+	allChIds.reserve(nFrames);
 
 	for (int i = 0; i < nFrames; i++) {
 		// interpolate using camera parameters
-		cv::Mat currentCharucoCorners, currentCharucoIds;
-		interpolateCornersCharuco(
-			all_corners[i], all_ids[i], all_imgs[i], ch_board,
-			currentCharucoCorners, currentCharucoIds,
-			camera_matrix, dist_coeffs);
+		cv::Mat currentChCorners, currentChIds;
+		interpolateCornersCh(
+			allCorners[i], allIds[i], allImgs[i], chBoard,
+			currentChCorners, currentChIds,
+			cameraMatrix, distCoeffs);
 
-		const int num = currentCharucoCorners.size().height;
+		const int num = currentChCorners.size().height;
 		if (num > 4) {
-			allCharucoCorners.push_back(currentCharucoCorners);
-			allCharucoIds.push_back(currentCharucoIds);
+			allChCorners.push_back(currentChCorners);
+			allChIds.push_back(currentChIds);
 		}
 	}
 
-	if (allCharucoCorners.size() < 4) {
+	if (allChCorners.size() < 4) {
 		std::cerr << "Not enough corners for calibration" << std::endl;
 		return false;
 	}
 
-	double rep_error = calibrateCameraCharuco(
-		allCharucoCorners, allCharucoIds, ch_board, frame_size,
-		camera_matrix, dist_coeffs, rvecs, tvecs, 0);
+	double repError = calibrateCameraCh(
+		allChCorners, allChIds, chBoard, frameSize,
+		cameraMatrix, distCoeffs, rvecs, tvecs, 0);
 
 	// ------------------------------------------------------------------------
 	// save camera parameters
@@ -2203,42 +2202,41 @@ bool calibrate(
 		std::cerr << "Cannot save output file" << std::endl;
 		return false;
 	}
-	fs << "image_width" << frame_size.width;
-	fs << "image_height" << frame_size.height;
-	fs << "camera_matrix" << camera_matrix;
-	fs << "distortion_coefficients" << dist_coeffs;
-	fs << "avg_reprojection_error" << rep_error;
+	fs << "imageWidth" << frameSize.width;
+	fs << "imageHeight" << frameSize.height;
+	fs << "cameraMatrix" << cameraMatrix;
+	fs << "distCoeffs" << distCoeffs;
+	fs << "avgReprojError" << repError;
 	fs.release();
 	return true;
 }
 
 bool estimate(
-	const cv::Mat & camera_matrix, 
-	const cv::Mat & dist_coeffs,
-	const cv::Size frame_size = cv::Size(1280, 720),
-	const float aspect_ratio = 1.0f,
-	const int board_pad = 10,
-	const int squares_x = 5,
-	const int squares_y = 8,
-	const float square_length = 0.04f,
-	const float marker_length = 0.02f)
+	const cv::Mat & cameraMatrix, 
+	const cv::Mat & distCoeffs,
+	const cv::Size frameSize = cv::Size(1280, 720),
+	const int boardPad = 10,
+	const int squaresX = 5,
+	const int squaresY = 8,
+	const float squareLength = 0.04f,
+	const float markerLength = 0.02f)
 {
-	float axisLength = 0.5f * (std::min(squares_x, squares_y) * (square_length));
+	float axisLength = 0.5f * (std::min(squaresX, squaresY) * (squareLength));
 
 	// ------------------------------------------------------------------------
 	// make board
 
 	cv::Ptr<Dictionary> dictionary = Dictionary::create();
-	cv::Ptr<CharucoBoard> ch_board = CharucoBoard::create(
-		squares_x, squares_y, square_length, marker_length, dictionary);
-	cv::Ptr<Board> board = ch_board.staticCast<Board>();
+	cv::Ptr<ChBoard> chBoard = ChBoard::create(
+		squaresX, squaresY, squareLength, markerLength, dictionary);
+	cv::Ptr<Board> board = chBoard.staticCast<Board>();
 
 	// ------------------------------------------------------------------------
 	// setup camera
 
 	cv::VideoCapture cap(1);
-	cap.set(CV_CAP_PROP_FRAME_WIDTH, frame_size.width);
-	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frame_size.height);
+	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
+	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frameSize.height);
 	if (!cap.isOpened())
 		return false;
 
@@ -2250,35 +2248,35 @@ bool estimate(
 	for (int i = 0;; ++i) {
 		 cap >> frame;
 
-		std::vector< int > ids, charucoIds;
+		std::vector< int > ids, chIds;
 		std::vector< std::vector< cv::Point2f > > corners, rejected;
-		std::vector< cv::Point2f > charucoCorners;
+		std::vector< cv::Point2f > chCorners;
 		detectMarkers(frame, dictionary, corners, ids,
 			DetectorParameters::create(), rejected);
 		refineDetectedMarkers(frame, board, corners, ids, rejected);
 
-		int num_corners = 0;
+		int numCorners = 0;
 		if (ids.size() > 0)
-			num_corners = interpolateCornersCharuco(
-			corners, ids, frame, ch_board, charucoCorners,
-			charucoIds, camera_matrix, dist_coeffs);
+			numCorners = interpolateCornersCh(
+			corners, ids, frame, chBoard, chCorners,
+			chIds, cameraMatrix, distCoeffs);
 
 		cv::Vec3d rvec, tvec;
 		bool validPose = false;
-		if (camera_matrix.total() != 0) {
-			validPose = estimatePoseCharucoBoard(
-				charucoCorners, charucoIds, ch_board,
-				camera_matrix, dist_coeffs, rvec, tvec);
+		if (cameraMatrix.total() != 0) {
+			validPose = estimatePoseChBoard(
+				chCorners, chIds, chBoard,
+				cameraMatrix, distCoeffs, rvec, tvec);
 		}
 
 		cv::Mat vis;
 		frame.copyTo(vis);
-		if (num_corners > 0)
-			drawDetectedCornersCharuco(
-				vis, charucoCorners, charucoIds, cv::Scalar(0, 255, 255));
+		if (numCorners > 0)
+			drawDetectedCornersCh(
+				vis, chCorners, chIds, cv::Scalar(0, 255, 255));
 		if (validPose)
 			drawAxis(
-			vis, camera_matrix, dist_coeffs, rvec, tvec, axisLength);
+			vis, cameraMatrix, distCoeffs, rvec, tvec, axisLength);
 		cv::imshow("vis", vis);
 
 		const char key = cv::waitKey(30);
@@ -2305,16 +2303,16 @@ int main()
 		std::cerr << "Cannot open calibration file" << std::endl;
 		return -1;
 	}
-	cv::Size frame_size;
-	cv::Mat camera_matrix, dist_coeffs;
-	fs["camera_matrix"] >> camera_matrix;
-	fs["distortion_coefficients"] >> dist_coeffs;
+	cv::Size frameSize;
+	cv::Mat cameraMatrix, distCoeffs;
+	fs["cameraMatrix"] >> cameraMatrix;
+	fs["distCoeffs"] >> distCoeffs;
 	fs.release();
 
-	std::cout << "camera_matrix: " << camera_matrix << std::endl;
-	std::cout << "dist_coeffs: " << dist_coeffs << std::endl;
+	std::cout << "cameraMatrix: " << cameraMatrix << std::endl;
+	std::cout << "distCoeffs: " << distCoeffs << std::endl;
 
-	estimate(camera_matrix, dist_coeffs);
+	estimate(cameraMatrix, distCoeffs);
 
 	return 0;
 }
