@@ -1,69 +1,6 @@
 #include "opencv2/opencv.hpp"
 #include "opencv2/core/hal/hal.hpp"
 
-static cv::Mat _extractBits(
-	cv::InputArray _image,
-	cv::InputArray _corners,
-	int markerSize,
-	int markerBorderBits,
-	int cellSize,
-	double cellMarginRate,
-	double minStdDevOtsu) {
-
-	CV_Assert(_image.getMat().channels() == 1);
-	CV_Assert(_corners.total() == 4);
-	CV_Assert(markerBorderBits > 0 && cellSize > 0 && cellMarginRate >= 0 && cellMarginRate <= 1);
-	CV_Assert(minStdDevOtsu >= 0);
-
-	int markerSizeWithBorders = markerSize + 2 * markerBorderBits;
-	int cellMarginPixels = int(cellMarginRate * cellSize);
-
-	cv::Mat resultImg;
-	int resultImgSize = markerSizeWithBorders * cellSize;
-	cv::Mat resultImgCorners(4, 1, CV_32FC2);
-	resultImgCorners.ptr< cv::Point2f >(0)[0] = cv::Point2f(0, 0);
-	resultImgCorners.ptr< cv::Point2f >(0)[1] = cv::Point2f((float)resultImgSize - 1, 0);
-	resultImgCorners.ptr< cv::Point2f >(0)[2] =
-		cv::Point2f((float)resultImgSize - 1, (float)resultImgSize - 1);
-	resultImgCorners.ptr< cv::Point2f >(0)[3] = cv::Point2f(0, (float)resultImgSize - 1);
-
-	cv::Mat transformation = getPerspectiveTransform(_corners, resultImgCorners);
-	cv::warpPerspective(_image, resultImg, transformation, cv::Size(resultImgSize, resultImgSize),
-		cv::INTER_NEAREST);
-
-	cv::Mat bits(markerSizeWithBorders, markerSizeWithBorders, CV_8UC1, cv::Scalar::all(0));
-
-	cv::Mat mean, stddev;
-
-	cv::Mat innerRegion = resultImg.colRange(cellSize / 2, resultImg.cols - cellSize / 2)
-		.rowRange(cellSize / 2, resultImg.rows - cellSize / 2);
-	cv::meanStdDev(innerRegion, mean, stddev);
-	if (stddev.ptr< double >(0)[0] < minStdDevOtsu) {
-
-		if (mean.ptr< double >(0)[0] > 127)
-			bits.setTo(1);
-		else
-			bits.setTo(0);
-		return bits;
-	}
-
-	cv::threshold(resultImg, resultImg, 125, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-
-	for (int y = 0; y < markerSizeWithBorders; y++) {
-		for (int x = 0; x < markerSizeWithBorders; x++) {
-			int Xstart = x * (cellSize)+cellMarginPixels;
-			int Ystart = y * (cellSize)+cellMarginPixels;
-			cv::Mat square = resultImg(cv::Rect(Xstart, Ystart, cellSize - 2 * cellMarginPixels,
-				cellSize - 2 * cellMarginPixels));
-
-			size_t nZ = (size_t)cv::countNonZero(square);
-			if (nZ > square.total() / 2) bits.at< unsigned char >(y, x) = 1;
-		}
-	}
-
-	return bits;
-}
-
 class Dictionary {
 
 public:
@@ -516,1567 +453,1707 @@ private:
 
 };
 
-struct DetectorParameters {
 
-	DetectorParameters()
-	: adaptiveThreshWinSizeMin(3),
-	adaptiveThreshWinSizeMax(23),
-	adaptiveThreshWinSizeStep(10),
-	adaptiveThreshConstant(7),
-	minMarkerPerimeterRate(0.03),
-	maxMarkerPerimeterRate(4.),
-	polygonalApproxAccuracyRate(0.03),
-	minCornerDistanceRate(0.05),
-	minDistanceToBorder(3),
-	minMarkerDistanceRate(0.05),
-	doCornerRefinement(false),
-	cornerRefinementWinSize(5),
-	cornerRefinementMaxIterations(30),
-	cornerRefinementMinAccuracy(0.1),
-	markerBorderBits(1),
-	perspectiveRemovePixelPerCell(4),
-	perspectiveRemoveIgnoredMarginPerCell(0.13),
-	maxErroneousBitsInBorderRate(0.35),
-	minOtsuStdDev(5.0),
-	errorCorrectionRate(0.6) {}
+class Detector
+{
+	struct DetectorParameters {
 
-	static cv::Ptr<DetectorParameters> DetectorParameters::create() {
-		return cv::makePtr<DetectorParameters>();
-	}
+		DetectorParameters()
+		: adaptiveThreshWinSizeMin(3),
+		adaptiveThreshWinSizeMax(23),
+		adaptiveThreshWinSizeStep(10),
+		adaptiveThreshConstant(7),
+		minMarkerPerimeterRate(0.03),
+		maxMarkerPerimeterRate(4.),
+		polygonalApproxAccuracyRate(0.03),
+		minCornerDistanceRate(0.05),
+		minDistanceToBorder(3),
+		minMarkerDistanceRate(0.05),
+		doCornerRefinement(false),
+		cornerRefinementWinSize(5),
+		cornerRefinementMaxIterations(30),
+		cornerRefinementMinAccuracy(0.1),
+		markerBorderBits(1),
+		perspectiveRemovePixelPerCell(4),
+		perspectiveRemoveIgnoredMarginPerCell(0.13),
+		maxErroneousBitsInBorderRate(0.35),
+		minOtsuStdDev(5.0),
+		errorCorrectionRate(0.6) {}
 
-	int adaptiveThreshWinSizeMin;
-	int adaptiveThreshWinSizeMax;
-	int adaptiveThreshWinSizeStep;
-	double adaptiveThreshConstant;
-	double minMarkerPerimeterRate;
-	double maxMarkerPerimeterRate;
-	double polygonalApproxAccuracyRate;
-	double minCornerDistanceRate;
-	int minDistanceToBorder;
-	double minMarkerDistanceRate;
-	bool doCornerRefinement;
-	int cornerRefinementWinSize;
-	int cornerRefinementMaxIterations;
-	double cornerRefinementMinAccuracy;
-	int markerBorderBits;
-	int perspectiveRemovePixelPerCell;
-	double perspectiveRemoveIgnoredMarginPerCell;
-	double maxErroneousBitsInBorderRate;
-	double minOtsuStdDev;
-	double errorCorrectionRate;
-};
+		static cv::Ptr<DetectorParameters> DetectorParameters::create() {
+			return cv::makePtr<DetectorParameters>();
+		}
 
-class DetectInitialCandidatesParallel : public cv::ParallelLoopBody {
+		int adaptiveThreshWinSizeMin;
+		int adaptiveThreshWinSizeMax;
+		int adaptiveThreshWinSizeStep;
+		double adaptiveThreshConstant;
+		double minMarkerPerimeterRate;
+		double maxMarkerPerimeterRate;
+		double polygonalApproxAccuracyRate;
+		double minCornerDistanceRate;
+		int minDistanceToBorder;
+		double minMarkerDistanceRate;
+		bool doCornerRefinement;
+		int cornerRefinementWinSize;
+		int cornerRefinementMaxIterations;
+		double cornerRefinementMinAccuracy;
+		int markerBorderBits;
+		int perspectiveRemovePixelPerCell;
+		double perspectiveRemoveIgnoredMarginPerCell;
+		double maxErroneousBitsInBorderRate;
+		double minOtsuStdDev;
+		double errorCorrectionRate;
+	};
+
 public:
-	DetectInitialCandidatesParallel(const cv::Mat *_grey,
-		std::vector< std::vector< std::vector< cv::Point2f > > > *_candidatesArrays,
-		std::vector< std::vector< std::vector< cv::Point > > > *_contoursArrays,
-		const cv::Ptr<DetectorParameters> &_params)
-		: grey(_grey), candidatesArrays(_candidatesArrays), contoursArrays(_contoursArrays),
-		params(_params) {}
-
-	void operator()(const cv::Range &range) const {
-		const int begin = range.start;
-		const int end = range.end;
-
-		for (int i = begin; i < end; i++) {
-			int currScale =
-				params->adaptiveThreshWinSizeMin + i * params->adaptiveThreshWinSizeStep;
-
-			cv::Mat thresh;
-			_threshold(*grey, thresh, currScale, params->adaptiveThreshConstant);
-
-			_findMarkerContours(thresh, (*candidatesArrays)[i], (*contoursArrays)[i],
-				params->minMarkerPerimeterRate, params->maxMarkerPerimeterRate,
-				params->polygonalApproxAccuracyRate, params->minCornerDistanceRate,
-				params->minDistanceToBorder);
-		}
+	Detector(
+		const int _squaresX = 5,
+		const int _squaresY = 8,
+		const float _squareLength = 0.04f,
+		const float _markerLength = 0.02f) {
+		squaresX = _squaresX;
+		squaresY = _squaresY;
+		squareLength = _squareLength;
+		markerLength = _markerLength;
+		dictionary = Dictionary::create();
+		chBoard = ChBoard::create(squaresX, squaresY, squareLength, markerLength, dictionary);
+		board = chBoard.staticCast<Board>();
+		params = DetectorParameters::create();
 	}
-
-private:
-	DetectInitialCandidatesParallel &operator=(const DetectInitialCandidatesParallel &);
-
-	static void _threshold(cv::InputArray _in, cv::OutputArray _out, int winSize, double constant) {
-		CV_Assert(winSize >= 3);
-		if (winSize % 2 == 0) winSize++;
-		adaptiveThreshold(_in, _out, 255, cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY_INV, winSize, constant);
-	}
-
-	static void _findMarkerContours(
-		cv::InputArray _in,
-		std::vector< std::vector< cv::Point2f > > &candidates,
-		std::vector< std::vector< cv::Point > > &contoursOut, double minPerimeterRate,
-		double maxPerimeterRate, double accuracyRate,
-		double minCornerDistanceRate, int minDistanceToBorder) {
-
-		CV_Assert(minPerimeterRate > 0 && maxPerimeterRate > 0 && accuracyRate > 0 &&
-			minCornerDistanceRate >= 0 && minDistanceToBorder >= 0);
-
-		unsigned int minPerimeterPixels =
-			(unsigned int)(minPerimeterRate * std::max(_in.getMat().cols, _in.getMat().rows));
-		unsigned int maxPerimeterPixels =
-			(unsigned int)(maxPerimeterRate * std::max(_in.getMat().cols, _in.getMat().rows));
-
-		cv::Mat contoursImg;
-		_in.getMat().copyTo(contoursImg);
-		std::vector< std::vector< cv::Point > > contours;
-		cv::findContours(contoursImg, contours, cv::RETR_LIST, cv::CHAIN_APPROX_NONE);
-
-		for (unsigned int i = 0; i < contours.size(); i++) {
-
-			if (contours[i].size() < minPerimeterPixels || contours[i].size() > maxPerimeterPixels)
-				continue;
-
-			std::vector< cv::Point > approxCurve;
-			cv::approxPolyDP(contours[i], approxCurve, double(contours[i].size()) * accuracyRate, true);
-			if (approxCurve.size() != 4 || !cv::isContourConvex(approxCurve)) continue;
-
-			double minDistSq =
-				std::max(contoursImg.cols, contoursImg.rows)
-				* std::max(contoursImg.cols, contoursImg.rows);
-			for (int j = 0; j < 4; j++) {
-				double d = (double)(approxCurve[j].x - approxCurve[(j + 1) % 4].x) *
-					(double)(approxCurve[j].x - approxCurve[(j + 1) % 4].x) +
-					(double)(approxCurve[j].y - approxCurve[(j + 1) % 4].y) *
-					(double)(approxCurve[j].y - approxCurve[(j + 1) % 4].y);
-				minDistSq = std::min(minDistSq, d);
-			}
-			double minCornerDistancePixels = double(contours[i].size()) * minCornerDistanceRate;
-			if (minDistSq < minCornerDistancePixels * minCornerDistancePixels) continue;
-
-			bool tooNearBorder = false;
-			for (int j = 0; j < 4; j++) {
-				if (approxCurve[j].x < minDistanceToBorder || approxCurve[j].y < minDistanceToBorder ||
-					approxCurve[j].x > contoursImg.cols - 1 - minDistanceToBorder ||
-					approxCurve[j].y > contoursImg.rows - 1 - minDistanceToBorder)
-					tooNearBorder = true;
-			}
-			if (tooNearBorder) continue;
-
-			std::vector< cv::Point2f > currentCandidate;
-			currentCandidate.resize(4);
-			for (int j = 0; j < 4; j++) {
-				currentCandidate[j] = cv::Point2f((float)approxCurve[j].x, (float)approxCurve[j].y);
-			}
-			candidates.push_back(currentCandidate);
-			contoursOut.push_back(contours[i]);
-		}
-	}
-
-	const cv::Mat *grey;
-	std::vector< std::vector< std::vector< cv::Point2f > > > *candidatesArrays;
-	std::vector< std::vector< std::vector< cv::Point > > > *contoursArrays;
-	const cv::Ptr<DetectorParameters> &params;
-};
-
-class IdentifyCandidatesParallel : public cv::ParallelLoopBody {
-public:
-	IdentifyCandidatesParallel(
-		const cv::Mat *_grey,
-		cv::InputArrayOfArrays _candidates,
-		cv::InputArrayOfArrays _contours,
-		cv::Ptr<Dictionary> &_dictionary,
-		std::vector< int > *_idsTmp,
-		std::vector< char > *_validCandidates,
-		const cv::Ptr<DetectorParameters> &_params)
-		: grey(_grey), candidates(_candidates), contours(_contours), dictionary(_dictionary),
-		idsTmp(_idsTmp), validCandidates(_validCandidates), params(_params) {}
-
-	void operator()(const cv::Range &range) const {
-		const int begin = range.start;
-		const int end = range.end;
-
-		for (int i = begin; i < end; i++) {
-			int currId;
-			cv::Mat currentCandidate = candidates.getMat(i);
-			if (_identifyOneCandidate(dictionary, *grey, currentCandidate, currId, params)) {
-				(*validCandidates)[i] = 1;
-				(*idsTmp)[i] = currId;
-			}
-		}
-	}
-
-private:
-	IdentifyCandidatesParallel &operator=(const IdentifyCandidatesParallel &);
-
-	static bool _identifyOneCandidate(
-		cv::Ptr<Dictionary> &dictionary,
-		cv::InputArray _image,
-		cv::InputOutputArray _corners,
-		int &idx,
-		const cv::Ptr<DetectorParameters> &params) {
-
-		CV_Assert(_corners.total() == 4);
-		CV_Assert(_image.getMat().total() != 0);
-		CV_Assert(params->markerBorderBits > 0);
-
-		cv::Mat candidateBits =
-			_extractBits(_image, _corners, dictionary->markerSize, params->markerBorderBits,
-			params->perspectiveRemovePixelPerCell,
-			params->perspectiveRemoveIgnoredMarginPerCell, params->minOtsuStdDev);
-
-		int maximumErrorsInBorder =
-			int(dictionary->markerSize * dictionary->markerSize * params->maxErroneousBitsInBorderRate);
-		int borderErrors =
-			_getBorderErrors(candidateBits, dictionary->markerSize, params->markerBorderBits);
-		if (borderErrors > maximumErrorsInBorder) return false;
-
-		cv::Mat onlyBits =
-			candidateBits.rowRange(params->markerBorderBits,
-			candidateBits.rows - params->markerBorderBits)
-			.colRange(params->markerBorderBits, candidateBits.rows - params->markerBorderBits);
-
-		int rotation;
-		if (!dictionary->identify(onlyBits, idx, rotation, params->errorCorrectionRate))
-			return false;
-		else {
-
-			if (rotation != 0) {
-				cv::Mat copyPoints = _corners.getMat().clone();
-				for (int j = 0; j < 4; j++)
-					_corners.getMat().ptr< cv::Point2f >(0)[j] =
-					copyPoints.ptr< cv::Point2f >(0)[(j + 4 - rotation) % 4];
-			}
-			return true;
-		}
-	}
-
-	static int _getBorderErrors(const cv::Mat &bits, int markerSize, int borderSize) {
-
-		int sizeWithBorders = markerSize + 2 * borderSize;
-
-		CV_Assert(markerSize > 0 && bits.cols == sizeWithBorders && bits.rows == sizeWithBorders);
-
-		int totalErrors = 0;
-		for (int y = 0; y < sizeWithBorders; y++) {
-			for (int k = 0; k < borderSize; k++) {
-				if (bits.ptr< unsigned char >(y)[k] != 0) totalErrors++;
-				if (bits.ptr< unsigned char >(y)[sizeWithBorders - 1 - k] != 0) totalErrors++;
-			}
-		}
-		for (int x = borderSize; x < sizeWithBorders - borderSize; x++) {
-			for (int k = 0; k < borderSize; k++) {
-				if (bits.ptr< unsigned char >(k)[x] != 0) totalErrors++;
-				if (bits.ptr< unsigned char >(sizeWithBorders - 1 - k)[x] != 0) totalErrors++;
-			}
-		}
-		return totalErrors;
-	}
-
-	const cv::Mat *grey;
-	cv::InputArrayOfArrays candidates, contours;
-	cv::Ptr<Dictionary> &dictionary;
-	std::vector< int > *idsTmp;
-	std::vector< char > *validCandidates;
-	const cv::Ptr<DetectorParameters> &params;
-};
-
-class MarkerSubpixelParallel : public cv::ParallelLoopBody {
-public:
-	MarkerSubpixelParallel(
-		const cv::Mat *_grey,
-		cv::OutputArrayOfArrays _corners,
-		const cv::Ptr<DetectorParameters> &_params)
-		: grey(_grey), corners(_corners), params(_params) {}
-
-	void operator()(const cv::Range &range) const {
-		const int begin = range.start;
-		const int end = range.end;
-
-		for (int i = begin; i < end; i++) {
-			cv::cornerSubPix(
-				*grey,
-				corners.getMat(i),
-				cv::Size(params->cornerRefinementWinSize,
-				params->cornerRefinementWinSize),
-				cv::Size(-1, -1),
-				cv::TermCriteria(cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS,
-				params->cornerRefinementMaxIterations,
-				params->cornerRefinementMinAccuracy));
-		}
-	}
-
-private:
-	MarkerSubpixelParallel &operator=(const MarkerSubpixelParallel &);
-
-	const cv::Mat *grey;
-	cv::OutputArrayOfArrays corners;
-	const cv::Ptr<DetectorParameters> &params;
-};
-
-class ChSubpixelParallel : public cv::ParallelLoopBody {
-public:
-	ChSubpixelParallel(
-		const cv::Mat *_grey,
-		std::vector< cv::Point2f > *_filteredChessboardImgPoints,
-		std::vector< cv::Size > *_filteredWinSizes,
-		const cv::Ptr<DetectorParameters> &_params)
-		: grey(_grey), filteredChessboardImgPoints(_filteredChessboardImgPoints),
-		filteredWinSizes(_filteredWinSizes), params(_params) {}
-
-	void operator()(const cv::Range &range) const {
-		const int begin = range.start;
-		const int end = range.end;
-
-		for (int i = begin; i < end; i++) {
-			std::vector< cv::Point2f > in;
-			in.push_back((*filteredChessboardImgPoints)[i]);
-			cv::Size winSize = (*filteredWinSizes)[i];
-			if (winSize.height == -1 || winSize.width == -1)
-				winSize = cv::Size(params->cornerRefinementWinSize, params->cornerRefinementWinSize);
-
-			cornerSubPix(*grey, in, winSize, cv::Size(),
-				cv::TermCriteria(cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS,
-				params->cornerRefinementMaxIterations,
-				params->cornerRefinementMinAccuracy));
-
-			(*filteredChessboardImgPoints)[i] = in[0];
-		}
-	}
-
-private:
-	ChSubpixelParallel &operator=(const ChSubpixelParallel &);
-
-	const cv::Mat *grey;
-	std::vector< cv::Point2f > *filteredChessboardImgPoints;
-	std::vector< cv::Size > *filteredWinSizes;
-	const cv::Ptr<DetectorParameters> &params;
-};
-
-static void _detectInitialCandidates(
-	const cv::Mat &grey,
-	std::vector< std::vector< cv::Point2f > > &candidates,
-	std::vector< std::vector< cv::Point > > &contours,
-	const cv::Ptr<DetectorParameters> &params) {
-
-	CV_Assert(params->adaptiveThreshWinSizeMin >= 3 && params->adaptiveThreshWinSizeMax >= 3);
-	CV_Assert(params->adaptiveThreshWinSizeMax >= params->adaptiveThreshWinSizeMin);
-	CV_Assert(params->adaptiveThreshWinSizeStep > 0);
-
-	int nScales = (params->adaptiveThreshWinSizeMax - params->adaptiveThreshWinSizeMin) /
-		params->adaptiveThreshWinSizeStep + 1;
-
-	std::vector< std::vector< std::vector< cv::Point2f > > > candidatesArrays((size_t)nScales);
-	std::vector< std::vector< std::vector< cv::Point > > > contoursArrays((size_t)nScales);
-
-	cv::parallel_for_(cv::Range(0, nScales), DetectInitialCandidatesParallel(&grey, &candidatesArrays,
-		&contoursArrays, params));
-
-	for (int i = 0; i < nScales; i++) {
-		for (unsigned int j = 0; j < candidatesArrays[i].size(); j++) {
-			candidates.push_back(candidatesArrays[i][j]);
-			contours.push_back(contoursArrays[i][j]);
-		}
-	}
-}
-
-static void _reorderCandidatesCorners(std::vector< std::vector< cv::Point2f > > &candidates) {
-
-	for (unsigned int i = 0; i < candidates.size(); i++) {
-		double dx1 = candidates[i][1].x - candidates[i][0].x;
-		double dy1 = candidates[i][1].y - candidates[i][0].y;
-		double dx2 = candidates[i][2].x - candidates[i][0].x;
-		double dy2 = candidates[i][2].y - candidates[i][0].y;
-		double crossProduct = (dx1 * dy2) - (dy1 * dx2);
-
-		if (crossProduct < 0.0) {
-			std::swap(candidates[i][1], candidates[i][3]);
-		}
-	}
-}
-
-static void _filterTooCloseCandidates(
-	const std::vector< std::vector< cv::Point2f > > &candidatesIn,
-	std::vector< std::vector< cv::Point2f > > &candidatesOut,
-	const std::vector< std::vector< cv::Point > > &contoursIn,
-	std::vector< std::vector< cv::Point > > &contoursOut,
-	double minMarkerDistanceRate) {
-
-	CV_Assert(minMarkerDistanceRate >= 0);
-
-	std::vector< std::pair< int, int > > nearCandidates;
-	for (unsigned int i = 0; i < candidatesIn.size(); i++) {
-		for (unsigned int j = i + 1; j < candidatesIn.size(); j++) {
-
-			int minimumPerimeter = std::min((int)contoursIn[i].size(), (int)contoursIn[j].size());
-
-			for (int fc = 0; fc < 4; fc++) {
-				double distSq = 0;
-				for (int c = 0; c < 4; c++) {
-
-					int modC = (c + fc) % 4;
-					distSq += (candidatesIn[i][modC].x - candidatesIn[j][c].x) *
-						(candidatesIn[i][modC].x - candidatesIn[j][c].x) +
-						(candidatesIn[i][modC].y - candidatesIn[j][c].y) *
-						(candidatesIn[i][modC].y - candidatesIn[j][c].y);
-				}
-				distSq /= 4.;
-
-				double minMarkerDistancePixels = double(minimumPerimeter) * minMarkerDistanceRate;
-				if (distSq < minMarkerDistancePixels * minMarkerDistancePixels) {
-					nearCandidates.push_back(std::pair< int, int >(i, j));
-					break;
-				}
-			}
-		}
-	}
-
-	std::vector< bool > toRemove(candidatesIn.size(), false);
-	for (unsigned int i = 0; i < nearCandidates.size(); i++) {
-
-		if (toRemove[nearCandidates[i].first] || toRemove[nearCandidates[i].second]) continue;
-		size_t perimeter1 = contoursIn[nearCandidates[i].first].size();
-		size_t perimeter2 = contoursIn[nearCandidates[i].second].size();
-		if (perimeter1 > perimeter2)
-			toRemove[nearCandidates[i].second] = true;
-		else
-			toRemove[nearCandidates[i].first] = true;
-	}
-
-	candidatesOut.clear();
-	unsigned long totalRemaining = 0;
-	for (unsigned int i = 0; i < toRemove.size(); i++)
-	if (!toRemove[i]) totalRemaining++;
-	candidatesOut.resize(totalRemaining);
-	contoursOut.resize(totalRemaining);
-	for (unsigned int i = 0, currIdx = 0; i < candidatesIn.size(); i++) {
-		if (toRemove[i]) continue;
-		candidatesOut[currIdx] = candidatesIn[i];
-		contoursOut[currIdx] = contoursIn[i];
-		currIdx++;
-	}
-}
-
-static void _detectCandidates(cv::InputArray _grey, cv::OutputArrayOfArrays _candidates,
-	cv::OutputArrayOfArrays _contours, const cv::Ptr<DetectorParameters> &_params) {
-
-	cv::Mat grey = _grey.getMat();
-	CV_Assert(grey.total() != 0);
-
-	std::vector< std::vector< cv::Point2f > > candidates;
-	std::vector< std::vector< cv::Point > > contours;
-
-	_detectInitialCandidates(grey, candidates, contours, _params);
-
-	_reorderCandidatesCorners(candidates);
-
-	std::vector< std::vector< cv::Point2f > > candidatesOut;
-	std::vector< std::vector< cv::Point > > contoursOut;
-	_filterTooCloseCandidates(candidates, candidatesOut, contours, contoursOut,
-		_params->minMarkerDistanceRate);
-
-	_candidates.create((int)candidatesOut.size(), 1, CV_32FC2);
-	_contours.create((int)contoursOut.size(), 1, CV_32SC2);
-	for (int i = 0; i < (int)candidatesOut.size(); i++) {
-		_candidates.create(4, 1, CV_32FC2, i, true);
-		cv::Mat m = _candidates.getMat(i);
-		for (int j = 0; j < 4; j++)
-			m.ptr< cv::Vec2f >(0)[j] = candidatesOut[i][j];
-
-		_contours.create((int)contoursOut[i].size(), 1, CV_32SC2, i, true);
-		cv::Mat c = _contours.getMat(i);
-		for (unsigned int j = 0; j < contoursOut[i].size(); j++)
-			c.ptr< cv::Point2i >()[j] = contoursOut[i][j];
-	}
-}
-
-void _copyVector2Output(std::vector< cv::Mat > &vec, cv::OutputArrayOfArrays out) {
-
-	out.release();
-	out.create((int)vec.size(), 1, CV_32FC2);
-
-	if (out.isMatVector()) {
-		for (unsigned int i = 0; i < vec.size(); i++) {
-			out.create(4, 1, CV_32FC2, i, true);
-			cv::Mat &m = out.getMatRef(i);
-			vec[i].copyTo(m);
-		}
-	}
-	else if (out.isUMatVector()) {
-		for (unsigned int i = 0; i < vec.size(); i++) {
-			out.create(4, 1, CV_32FC2, i, true);
-			cv::UMat &m = out.getUMatRef(i);
-			vec[i].copyTo(m);
-		}
-	}
-	else if (out.kind() == cv::_OutputArray::STD_VECTOR_VECTOR){
-		for (unsigned int i = 0; i < vec.size(); i++) {
-			out.create(4, 1, CV_32FC2, i, true);
-			cv::Mat m = out.getMat(i);
-			vec[i].copyTo(m);
-		}
-	}
-	else {
-		CV_Error(cv::Error::StsNotImplemented,
-			"Only Mat vector, UMat vector, and vector<vector> OutputArrays are currently supported.");
-	}
-}
-
-static void _identifyCandidates(
-	cv::InputArray _grey,
-	cv::InputArrayOfArrays _candidates,
-	cv::InputArrayOfArrays _contours,
-	cv::Ptr<Dictionary> &_dictionary,
-	cv::OutputArrayOfArrays _accepted,
-	cv::OutputArray _ids,
-	const cv::Ptr<DetectorParameters> &params,
-	cv::OutputArrayOfArrays _rejected = cv::noArray()) {
-
-	int ncandidates = (int)_candidates.total();
-
-	std::vector< cv::Mat > accepted;
-	std::vector< cv::Mat > rejected;
-	std::vector< int > ids;
-
-	cv::Mat grey = _grey.getMat();
-	CV_Assert(grey.total() != 0);
-
-	std::vector< int > idsTmp(ncandidates, -1);
-	std::vector< char > validCandidates(ncandidates, 0);
-
-	cv::parallel_for_(cv::Range(0, ncandidates),
-		IdentifyCandidatesParallel(&grey, _candidates, _contours, _dictionary, &idsTmp,
-		&validCandidates, params));
-
-	for (int i = 0; i < ncandidates; i++) {
-		if (validCandidates[i] == 1) {
-			accepted.push_back(_candidates.getMat(i));
-			ids.push_back(idsTmp[i]);
-		}
-		else {
-			rejected.push_back(_candidates.getMat(i));
-		}
-	}
-
-	_copyVector2Output(accepted, _accepted);
-
-	_ids.create((int)ids.size(), 1, CV_32SC1);
-	for (unsigned int i = 0; i < ids.size(); i++)
-		_ids.getMat().ptr< int >(0)[i] = ids[i];
-
-	if (_rejected.needed()) {
-		_copyVector2Output(rejected, _rejected);
-	}
-}
-
-static void _filterDetectedMarkers(
-	cv::InputArrayOfArrays _inCorners,
-	cv::InputArray _inIds,
-	cv::OutputArrayOfArrays _outCorners,
-	cv::OutputArray _outIds) {
-
-	CV_Assert(_inCorners.total() == _inIds.total());
-	if (_inCorners.total() == 0) return;
-
-	std::vector< bool > toRemove(_inCorners.total(), false);
-	bool atLeastOneRemove = false;
-
-	for (unsigned int i = 0; i < _inCorners.total() - 1; i++) {
-		for (unsigned int j = i + 1; j < _inCorners.total(); j++) {
-			if (_inIds.getMat().ptr< int >(0)[i] != _inIds.getMat().ptr< int >(0)[j]) continue;
-
-			bool inside = true;
-			for (unsigned int p = 0; p < 4; p++) {
-				cv::Point2f point = _inCorners.getMat(j).ptr< cv::Point2f >(0)[p];
-				if (cv::pointPolygonTest(_inCorners.getMat(i), point, false) < 0) {
-					inside = false;
-					break;
-				}
-			}
-			if (inside) {
-				toRemove[j] = true;
-				atLeastOneRemove = true;
-				continue;
-			}
-
-			inside = true;
-			for (unsigned int p = 0; p < 4; p++) {
-				cv::Point2f point = _inCorners.getMat(i).ptr< cv::Point2f >(0)[p];
-				if (pointPolygonTest(_inCorners.getMat(j), point, false) < 0) {
-					inside = false;
-					break;
-				}
-			}
-			if (inside) {
-				toRemove[i] = true;
-				atLeastOneRemove = true;
-				continue;
-			}
-		}
-	}
-
-	if (atLeastOneRemove) {
-		std::vector< cv::Mat > filteredCorners;
-		std::vector< int > filteredIds;
-
-		for (unsigned int i = 0; i < toRemove.size(); i++) {
-			if (!toRemove[i]) {
-				filteredCorners.push_back(_inCorners.getMat(i).clone());
-				filteredIds.push_back(_inIds.getMat().ptr< int >(0)[i]);
-			}
-		}
-
-		_outIds.create((int)filteredIds.size(), 1, CV_32SC1);
-		for (unsigned int i = 0; i < filteredIds.size(); i++)
-			_outIds.getMat().ptr< int >(0)[i] = filteredIds[i];
-
-		_outCorners.create((int)filteredCorners.size(), 1, CV_32FC2);
-		for (unsigned int i = 0; i < filteredCorners.size(); i++) {
-			_outCorners.create(4, 1, CV_32FC2, i, true);
-			filteredCorners[i].copyTo(_outCorners.getMat(i));
-		}
-	}
-}
-
-void detectMarkers(
-	cv::InputArray _image,
-	cv::Ptr<Dictionary> &_dictionary,
-	cv::OutputArrayOfArrays _corners,
-	cv::OutputArray _ids,
-	const cv::Ptr<DetectorParameters> &_params,
-	cv::OutputArrayOfArrays _rejectedImgPoints) {
-
-	CV_Assert(_image.getMat().total() != 0);
-
-	cv::Mat grey;
-	cv::cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
-
-	std::vector< std::vector< cv::Point2f > > candidates;
-	std::vector< std::vector< cv::Point > > contours;
-	_detectCandidates(grey, candidates, contours, _params);
-
-	_identifyCandidates(grey, candidates, contours, _dictionary, _corners, _ids, _params,
-		_rejectedImgPoints);
-
-	_filterDetectedMarkers(_corners, _ids, _corners, _ids);
-
-	if (_params->doCornerRefinement) {
-		CV_Assert(_params->cornerRefinementWinSize > 0 && _params->cornerRefinementMaxIterations > 0 &&
-			_params->cornerRefinementMinAccuracy > 0);
-
-		cv::parallel_for_(cv::Range(0, (int)_corners.total()),
-			MarkerSubpixelParallel(&grey, _corners, _params));
-	}
-}
-
-static void _getBoardObjectAndImagePoints(
-	cv::Ptr<Board> &_board,
-	cv::InputArray _detectedIds,
-	cv::InputArrayOfArrays _detectedCorners,
-	cv::OutputArray _imgPoints,
-	cv::OutputArray _objPoints) {
-
-	CV_Assert(_board->ids.size() == _board->objPoints.size());
-	CV_Assert(_detectedIds.total() == _detectedCorners.total());
-
-	size_t nDetectedMarkers = _detectedIds.total();
-
-	std::vector< cv::Point3f > objPnts;
-	objPnts.reserve(nDetectedMarkers);
-
-	std::vector< cv::Point2f > imgPnts;
-	imgPnts.reserve(nDetectedMarkers);
-
-	for (unsigned int i = 0; i < nDetectedMarkers; i++) {
-		int currentId = _detectedIds.getMat().ptr< int >(0)[i];
-		for (unsigned int j = 0; j < _board->ids.size(); j++) {
-			if (currentId == _board->ids[j]) {
-				for (int p = 0; p < 4; p++) {
-					objPnts.push_back(_board->objPoints[j][p]);
-					imgPnts.push_back(_detectedCorners.getMat(i).ptr< cv::Point2f >(0)[p]);
-				}
-			}
-		}
-	}
-
-	_objPoints.create((int)objPnts.size(), 1, CV_32FC3);
-	for (unsigned int i = 0; i < objPnts.size(); i++)
-		_objPoints.getMat().ptr< cv::Point3f >(0)[i] = objPnts[i];
-
-	_imgPoints.create((int)objPnts.size(), 1, CV_32FC2);
-	for (unsigned int i = 0; i < imgPnts.size(); i++)
-		_imgPoints.getMat().ptr< cv::Point2f >(0)[i] = imgPnts[i];
-}
-
-int estimatePoseBoard(
-	cv::InputArrayOfArrays _corners,
-	cv::InputArray _ids,
-	cv::Ptr<Board> &board,
-	cv::InputArray _cameraMatrix,
-	cv::InputArray _distCoeffs,
-	cv::OutputArray _rvec,
-	cv::OutputArray _tvec) {
-
-	CV_Assert(_corners.total() == _ids.total());
-
-	cv::Mat objPoints, imgPoints;
-	_getBoardObjectAndImagePoints(board, _ids, _corners, imgPoints, objPoints);
-
-	CV_Assert(imgPoints.total() == objPoints.total());
-
-	if (objPoints.total() == 0)
-		return 0;
-
-	bool useExtrinsicGuess = true;
-	if (_rvec.empty() || _tvec.empty())
+	~Detector() {}
+
+	bool calibrate(
+		const std::vector<std::vector<int>> & allIds,
+		const std::vector<std::vector<std::vector<cv::Point2f>>> & allCorners,
+		const std::vector<cv::Mat> & allImgs)
 	{
-		_rvec.create(3, 1, CV_64FC1);
-		_tvec.create(3, 1, CV_64FC1);
-		useExtrinsicGuess = false;
-	}
-	cv::solvePnP(objPoints, imgPoints, _cameraMatrix, _distCoeffs, _rvec, _tvec, useExtrinsicGuess);
+		if (allIds.size() < 1) {
+			std::cerr << "Not enough captures for calibration" << std::endl;
+			return false;
+		}
+		std::vector< cv::Mat > rvecs, tvecs;
 
-	return (int)objPoints.total() / 4;
-}
+		// prepare data for calibration
+		std::vector< std::vector< cv::Point2f > > allCornersConcatenated;
+		std::vector< int > allIdsConcatenated;
+		std::vector< int > markerCounterPerFrame;
+		markerCounterPerFrame.reserve(allCorners.size());
+		for (unsigned int i = 0; i < allCorners.size(); i++) {
+			markerCounterPerFrame.push_back((int)allCorners[i].size());
+			for (unsigned int j = 0; j < allCorners[i].size(); j++) {
+				allCornersConcatenated.push_back(allCorners[i][j]);
+				allIdsConcatenated.push_back(allIds[i][j]);
+			}
+		}
+		int nFrames = (int)allImgs.size();
+		if (nFrames <= 0) {
+			std::cerr << "Not enough images for calibration" << std::endl;
+			return false;
+		}
 
-static void _projectUndetectedMarkers(
-	cv::Ptr<Board> &_board,
-	cv::InputOutputArrayOfArrays _detectedCorners,
-	cv::InputOutputArray _detectedIds,
-	cv::InputArray _cameraMatrix,
-	cv::InputArray _distCoeffs,
-	cv::OutputArrayOfArrays _undetectedMarkersProjectedCorners,
-	cv::OutputArray _undetectedMarkersIds) {
+		cv::Size frameSize = allImgs[0].size();
+		double arucoRepErr = calibrateCameraAr(
+			allCornersConcatenated, allIdsConcatenated,
+			markerCounterPerFrame, frameSize);
 
-	cv::Mat rvec, tvec;
-	int boardDetectedMarkers;
-	boardDetectedMarkers = estimatePoseBoard(
-		_detectedCorners, _detectedIds, _board,
-		_cameraMatrix, _distCoeffs, rvec, tvec);
+		std::vector< cv::Mat > allChCorners;
+		std::vector< cv::Mat > allChIds;
+		allChCorners.reserve(nFrames);
+		allChIds.reserve(nFrames);
 
-	if (boardDetectedMarkers == 0) return;
+		for (int i = 0; i < nFrames; i++) {
+			// interpolate using camera parameters
+			cv::Mat currentChCorners, currentChIds;
+			interpolateCornersCh(
+				allCorners[i], allIds[i], allImgs[i], 
+				currentChCorners, currentChIds);
 
-	std::vector< std::vector< cv::Point2f > > undetectedCorners;
-	std::vector< int > undetectedIds;
-	for (unsigned int i = 0; i < _board->ids.size(); i++) {
-		int foundIdx = -1;
-		for (unsigned int j = 0; j < _detectedIds.total(); j++) {
-			if (_board->ids[i] == _detectedIds.getMat().ptr< int >()[j]) {
-				foundIdx = j;
-				break;
+			const int num = currentChCorners.size().height;
+			if (num > 4) {
+				allChCorners.push_back(currentChCorners);
+				allChIds.push_back(currentChIds);
 			}
 		}
 
-		if (foundIdx == -1) {
-			undetectedCorners.push_back(std::vector< cv::Point2f >());
-			undetectedIds.push_back(_board->ids[i]);
-			projectPoints(_board->objPoints[i], rvec, tvec, _cameraMatrix, _distCoeffs,
-				undetectedCorners.back());
+		if (allChCorners.size() < 4) {
+			std::cerr << "Not enough corners for calibration" << std::endl;
+			return false;
 		}
+
+		double repError = calibrateCameraCh(
+			allChCorners, allChIds, frameSize, rvecs, tvecs, 0);
+		return true;
 	}
 
-	_undetectedMarkersIds.create((int)undetectedIds.size(), 1, CV_32SC1);
-	for (unsigned int i = 0; i < undetectedIds.size(); i++)
-		_undetectedMarkersIds.getMat().ptr< int >(0)[i] = undetectedIds[i];
-
-	_undetectedMarkersProjectedCorners.create((int)undetectedCorners.size(), 1, CV_32FC2);
-	for (unsigned int i = 0; i < undetectedCorners.size(); i++) {
-		_undetectedMarkersProjectedCorners.create(4, 1, CV_32FC2, i, true);
-		for (int j = 0; j < 4; j++) {
-			_undetectedMarkersProjectedCorners.getMat(i).ptr< cv::Point2f >()[j] =
-				undetectedCorners[i][j];
-		}
-	}
-}
-
-static void _projectUndetectedMarkers(
-	cv::Ptr<Board> &_board,
-	cv::InputOutputArrayOfArrays _detectedCorners,
-	cv::InputOutputArray _detectedIds,
-	cv::OutputArrayOfArrays _undetectedMarkersProjectedCorners,
-	cv::OutputArray _undetectedMarkersIds) {
-
-	CV_Assert(_board->objPoints.size() > 0);
-	CV_Assert(_board->objPoints[0].size() > 0);
-	float boardZ = _board->objPoints[0][0].z;
-	for (unsigned int i = 0; i < _board->objPoints.size(); i++) {
-		for (unsigned int j = 0; j < _board->objPoints[i].size(); j++) {
-			CV_Assert(boardZ == _board->objPoints[i][j].z);
-		}
+	void detect(
+		const cv::Mat & frame,
+		std::vector<std::vector<cv::Point2f>> & corners,
+		std::vector<int> & ids,
+		std::vector<std::vector<cv::Point2f>> & rejected)
+	{
+		detectMarkers(frame, corners, ids, rejected);
+		refineDetectedMarkers(frame, corners, ids, rejected);
 	}
 
-	std::vector< cv::Point2f > detectedMarkersObj2DAll;
+	void detect(
+		const cv::Mat & frame,
+		std::vector<std::vector<cv::Point2f>> & corners,
+		std::vector<int> & ids,
+		std::vector<std::vector<cv::Point2f>> & rejected,
+		std::vector<cv::Point2f> & chCorners,
+		std::vector<int> & chIds)
+	{
+		detect(frame, corners, ids, rejected);
+		int numCorners = 0;
+		if (ids.size() > 0)
+			numCorners = interpolateCornersCh(corners, ids, frame, chCorners, chIds);
+	}
 
-	std::vector< cv::Point2f > imageCornersAll;
-	std::vector< std::vector< cv::Point2f > > undetectedMarkersObj2D;
+	bool getPose(
+		const cv::Mat & frame,
+		cv::Vec3d & rvec, 
+		cv::Vec3d & tvec,
+		std::vector<cv::Point2f> & chCorners = std::vector<cv::Point2f>(),
+		std::vector<int> & chIds = std::vector<int>()) {
 
-	std::vector< int > undetectedMarkersIds;
+		if (chCorners.empty()) {
+			std::vector<std::vector<cv::Point2f>> corners, rejected;
+			std::vector<int> ids;
+			detect(frame, corners, ids, rejected, chCorners, chIds);
+		}
 
-	for (unsigned int j = 0; j < _board->ids.size(); j++) {
-		bool found = false;
-		for (unsigned int i = 0; i < _detectedIds.total(); i++) {
-			if (_detectedIds.getMat().ptr< int >()[i] == _board->ids[j]) {
-				for (int c = 0; c < 4; c++) {
-					imageCornersAll.push_back(_detectedCorners.getMat(i).ptr< cv::Point2f >()[c]);
-					detectedMarkersObj2DAll.push_back(
-						cv::Point2f(_board->objPoints[j][c].x, _board->objPoints[j][c].y));
-				}
-				found = true;
-				break;
+		bool validPose = false;
+		if (cameraMatrix.total() != 0)
+			validPose = estimatePoseChBoard(chCorners, chIds, rvec, tvec);
+		return validPose;
+	}
+
+	bool saveBoard(
+		const std::string filename,
+		const cv::Size image_size = cv::Size(2480, 3508),
+		const int boardPad = 10) {
+		cv::Mat boardImg;
+		chBoard->draw(image_size, boardImg, boardPad);
+		cv::imwrite(filename, boardImg);
+		return true;
+	}
+
+	bool saveCalibration(const std::string filename) {
+		cv::FileStorage fs(filename, cv::FileStorage::WRITE);
+		if (!fs.isOpened()) {
+			std::cerr << "Cannot save output file" << std::endl;
+			return false;
+		}
+		fs << "cameraMatrix" << cameraMatrix;
+		fs << "distCoeffs" << distCoeffs;
+		fs.release();
+		return true;
+	}
+
+	bool readCalibration(const std::string filename)
+	{
+		cv::FileStorage fs(filename, cv::FileStorage::READ);
+		if (!fs.isOpened()) {
+			std::cerr << "Cannot open calibration file" << std::endl;
+			return false;
+		}
+		cv::Size frameSize;
+		fs["cameraMatrix"] >> cameraMatrix;
+		fs["distCoeffs"] >> distCoeffs;
+		fs.release();
+
+		std::cout << "cameraMatrix: " << std::endl << cameraMatrix << std::endl;
+		std::cout << "distCoeffs: " << std::endl << distCoeffs << std::endl;
+		return true;
+	}
+
+
+	void drawMarkers(
+		cv::InputOutputArray _image,
+		cv::InputArrayOfArrays _corners,
+		cv::InputArray _ids,
+		cv::Scalar borderColor) {
+
+		CV_Assert(_image.getMat().total() != 0 &&
+			(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
+		CV_Assert((_corners.total() == _ids.total()) || _ids.total() == 0);
+
+		cv::Scalar textColor, cornerColor;
+		textColor = cornerColor = borderColor;
+		std::swap(textColor.val[0], textColor.val[1]);
+		std::swap(cornerColor.val[1], cornerColor.val[2]);
+
+		int nMarkers = (int)_corners.total();
+		for (int i = 0; i < nMarkers; i++) {
+			cv::Mat currentMarker = _corners.getMat(i);
+			CV_Assert(currentMarker.total() == 4 && currentMarker.type() == CV_32FC2);
+
+			for (int j = 0; j < 4; j++) {
+				cv::Point2f p0, p1;
+				p0 = currentMarker.ptr< cv::Point2f >(0)[j];
+				p1 = currentMarker.ptr< cv::Point2f >(0)[(j + 1) % 4];
+				cv::line(_image, p0, p1, borderColor, 1);
+			}
+
+			cv::rectangle(_image, currentMarker.ptr< cv::Point2f >(0)[0] - cv::Point2f(3, 3),
+				currentMarker.ptr< cv::Point2f >(0)[0] + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
+
+			if (_ids.total() != 0) {
+				cv::Point2f cent(0, 0);
+				for (int p = 0; p < 4; p++)
+					cent += currentMarker.ptr< cv::Point2f >(0)[p];
+				cent = cent / 4.;
+				std::stringstream s;
+				s << "id=" << _ids.getMat().ptr< int >(0)[i];
+				cv::putText(_image, s.str(), cent, cv::FONT_HERSHEY_SIMPLEX, 0.5, textColor, 1, cv::LINE_AA);
 			}
 		}
-		if (!found) {
-			undetectedMarkersObj2D.push_back(std::vector< cv::Point2f >());
-			for (int c = 0; c < 4; c++) {
-				undetectedMarkersObj2D.back().push_back(
-					cv::Point2f(_board->objPoints[j][c].x, _board->objPoints[j][c].y));
+	}
+
+	void drawCorners(
+		cv::InputOutputArray _image,
+		cv::InputArray _chCorners,
+		cv::InputArray _chIds,
+		cv::Scalar cornerColor) {
+
+		CV_Assert(_image.getMat().total() != 0 &&
+			(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
+		CV_Assert((_chCorners.getMat().total() == _chIds.getMat().total()) ||
+			_chIds.getMat().total() == 0);
+
+		unsigned int nCorners = (unsigned int)_chCorners.getMat().total();
+		for (unsigned int i = 0; i < nCorners; i++) {
+			cv::Point2f corner = _chCorners.getMat().at< cv::Point2f >(i);
+
+			cv::rectangle(_image, corner - cv::Point2f(3, 3), corner + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
+
+			if (_chIds.total() != 0) {
+				int id = _chIds.getMat().at< int >(i);
+				std::stringstream s;
+				s << "id=" << id;
+				cv::putText(_image, s.str(), corner + cv::Point2f(5, -5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+					cornerColor, 1, cv::LINE_AA);
 			}
-			undetectedMarkersIds.push_back(_board->ids[j]);
 		}
 	}
-	if (imageCornersAll.size() == 0) return;
 
-	cv::Mat transformation = cv::findHomography(detectedMarkersObj2DAll, imageCornersAll);
+	void drawAxis(
+		cv::InputOutputArray _image,
+		cv::InputArray _rvec,
+		cv::InputArray _tvec) {
+		float length = 0.5f * (std::min(squaresX, squaresY) * (squareLength));
 
-	_undetectedMarkersProjectedCorners.create((int)undetectedMarkersIds.size(), 1, CV_32FC2);
+		float axisLength = 0.5f * (std::min(squaresX, squaresY) * (squareLength));
 
-	for (unsigned int i = 0; i < undetectedMarkersObj2D.size(); i++) {
-		cv::Mat projectedMarker;
-		cv::perspectiveTransform(undetectedMarkersObj2D[i], projectedMarker, transformation);
+		CV_Assert(_image.getMat().total() != 0 &&
+			(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
+		CV_Assert(length > 0);
 
-		_undetectedMarkersProjectedCorners.create(4, 1, CV_32FC2, i, true);
-		projectedMarker.copyTo(_undetectedMarkersProjectedCorners.getMat(i));
+		std::vector< cv::Point3f > axisPoints;
+		axisPoints.push_back(cv::Point3f(0, 0, 0));
+		axisPoints.push_back(cv::Point3f(length, 0, 0));
+		axisPoints.push_back(cv::Point3f(0, length, 0));
+		axisPoints.push_back(cv::Point3f(0, 0, length));
+		std::vector< cv::Point2f > imagePoints;
+		cv::projectPoints(axisPoints, _rvec, _tvec, cameraMatrix, distCoeffs, imagePoints);
+
+		cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3);
+		cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3);
+		cv::line(_image, imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3);
 	}
 
-	_undetectedMarkersIds.create((int)undetectedMarkersIds.size(), 1, CV_32SC1);
-	for (unsigned int i = 0; i < undetectedMarkersIds.size(); i++)
-		_undetectedMarkersIds.getMat().ptr< int >(0)[i] = undetectedMarkersIds[i];
-}
 
-void refineDetectedMarkers(
-	cv::InputArray _image,
-	cv::Ptr<Board> &_board,
-	cv::InputOutputArrayOfArrays _detectedCorners,
-	cv::InputOutputArray _detectedIds,
-	cv::InputOutputArrayOfArrays _rejectedCorners,
-	cv::InputArray _cameraMatrix = cv::noArray(),
-	cv::InputArray _distCoeffs = cv::noArray(),
-	float minRepDistance = 10.f,
-	float errorCorrectionRate = 3.f,
-	bool checkAllOrders = true,
-	cv::OutputArray _recoveredIdxs = cv::noArray(),
-	const cv::Ptr<DetectorParameters> &_params = DetectorParameters::create()) {
+protected:
 
-	CV_Assert(minRepDistance > 0);
+	void detectMarkers(
+		cv::InputArray _image,
+		cv::OutputArrayOfArrays _corners,
+		cv::OutputArray _ids,
+		cv::OutputArrayOfArrays _rejectedImgPoints) {
 
-	if (_detectedIds.total() == 0 || _rejectedCorners.total() == 0) return;
+		CV_Assert(_image.getMat().total() != 0);
 
-	DetectorParameters &params = *_params;
+		cv::Mat grey;
+		cv::cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
 
-	std::vector< std::vector< cv::Point2f > > undetectedMarkersCorners;
-	std::vector< int > undetectedMarkersIds;
-	if (_cameraMatrix.total() != 0) {
+		std::vector< std::vector< cv::Point2f > > candidates;
+		std::vector< std::vector< cv::Point > > contours;
+		_detectCandidates(grey, candidates, contours);
+		_identifyCandidates(grey, candidates, contours, _corners, _ids, _rejectedImgPoints);
+		_filterDetectedMarkers(_corners, _ids, _corners, _ids);
 
+		if (params->doCornerRefinement) {
+			CV_Assert(params->cornerRefinementWinSize > 0 
+				&& params->cornerRefinementMaxIterations > 0 
+				&& params->cornerRefinementMinAccuracy > 0);
+
+			cv::parallel_for_(cv::Range(0, (int)_corners.total()),
+				MarkerSubpixelParallel(&grey, _corners, params));
+		}
+	}
+
+	void refineDetectedMarkers(
+		cv::InputArray _image,
+		cv::InputOutputArrayOfArrays _detectedCorners,
+		cv::InputOutputArray _detectedIds,
+		cv::InputOutputArrayOfArrays _rejectedCorners,
+		float minRepDistance = 10.f,
+		float errorCorrectionRate = 3.f,
+		bool checkAllOrders = true,
+		cv::OutputArray _recoveredIdxs = cv::noArray(),
+		const cv::Ptr<DetectorParameters> &_params = DetectorParameters::create()) {
+
+		CV_Assert(minRepDistance > 0);
+
+		if (_detectedIds.total() == 0 || _rejectedCorners.total() == 0) return;
+
+		DetectorParameters &params = *_params;
+
+		std::vector< std::vector< cv::Point2f > > undetectedMarkersCorners;
+		std::vector< int > undetectedMarkersIds;
 		_projectUndetectedMarkers(
-			_board, _detectedCorners, _detectedIds, _cameraMatrix, _distCoeffs,
+			_detectedCorners, _detectedIds,
 			undetectedMarkersCorners, undetectedMarkersIds);
 
-	}
-	else {
+		std::vector< bool > alreadyIdentified(_rejectedCorners.total(), false);
 
-		_projectUndetectedMarkers(
-			_board, _detectedCorners, _detectedIds, undetectedMarkersCorners,
-			undetectedMarkersIds);
-	}
+		Dictionary &dictionary = *(board->dictionary);
+		int maxCorrectionRecalculated =
+			int(double(dictionary.maxCorrectionBits) * errorCorrectionRate);
 
-	std::vector< bool > alreadyIdentified(_rejectedCorners.total(), false);
+		cv::Mat grey;
+		cv::cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
 
-	Dictionary &dictionary = *(_board->dictionary);
-	int maxCorrectionRecalculated =
-		int(double(dictionary.maxCorrectionBits) * errorCorrectionRate);
+		std::vector< cv::Mat > finalAcceptedCorners;
+		std::vector< int > finalAcceptedIds;
 
-	cv::Mat grey;
-	cv::cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
+		finalAcceptedCorners.resize(_detectedCorners.total());
+		finalAcceptedIds.resize(_detectedIds.total());
+		for (unsigned int i = 0; i < _detectedIds.total(); i++) {
+			finalAcceptedCorners[i] = _detectedCorners.getMat(i).clone();
+			finalAcceptedIds[i] = _detectedIds.getMat().ptr< int >()[i];
+		}
+		std::vector< int > recoveredIdxs;
 
-	std::vector< cv::Mat > finalAcceptedCorners;
-	std::vector< int > finalAcceptedIds;
+		for (unsigned int i = 0; i < undetectedMarkersIds.size(); i++) {
 
-	finalAcceptedCorners.resize(_detectedCorners.total());
-	finalAcceptedIds.resize(_detectedIds.total());
-	for (unsigned int i = 0; i < _detectedIds.total(); i++) {
-		finalAcceptedCorners[i] = _detectedCorners.getMat(i).clone();
-		finalAcceptedIds[i] = _detectedIds.getMat().ptr< int >()[i];
-	}
-	std::vector< int > recoveredIdxs;
+			int closestCandidateIdx = -1;
+			double closestCandidateDistance = minRepDistance * minRepDistance + 1;
+			cv::Mat closestRotatedMarker;
 
-	for (unsigned int i = 0; i < undetectedMarkersIds.size(); i++) {
+			for (unsigned int j = 0; j < _rejectedCorners.total(); j++) {
+				if (alreadyIdentified[j]) continue;
 
-		int closestCandidateIdx = -1;
-		double closestCandidateDistance = minRepDistance * minRepDistance + 1;
-		cv::Mat closestRotatedMarker;
+				double minDistance = closestCandidateDistance + 1;
+				bool valid = false;
+				int validRot = 0;
+				for (int c = 0; c < 4; c++) {
+					double currentMaxDistance = 0;
+					for (int k = 0; k < 4; k++) {
+						cv::Point2f rejCorner = _rejectedCorners.getMat(j).ptr< cv::Point2f >()[(c + k) % 4];
+						cv::Point2f distVector = undetectedMarkersCorners[i][k] - rejCorner;
+						double cornerDist = distVector.x * distVector.x + distVector.y * distVector.y;
+						currentMaxDistance = std::max(currentMaxDistance, cornerDist);
+					}
 
-		for (unsigned int j = 0; j < _rejectedCorners.total(); j++) {
-			if (alreadyIdentified[j]) continue;
-
-			double minDistance = closestCandidateDistance + 1;
-			bool valid = false;
-			int validRot = 0;
-			for (int c = 0; c < 4; c++) {
-				double currentMaxDistance = 0;
-				for (int k = 0; k < 4; k++) {
-					cv::Point2f rejCorner = _rejectedCorners.getMat(j).ptr< cv::Point2f >()[(c + k) % 4];
-					cv::Point2f distVector = undetectedMarkersCorners[i][k] - rejCorner;
-					double cornerDist = distVector.x * distVector.x + distVector.y * distVector.y;
-					currentMaxDistance = std::max(currentMaxDistance, cornerDist);
+					if (currentMaxDistance < closestCandidateDistance) {
+						valid = true;
+						validRot = c;
+						minDistance = currentMaxDistance;
+					}
+					if (!checkAllOrders) break;
 				}
 
-				if (currentMaxDistance < closestCandidateDistance) {
-					valid = true;
-					validRot = c;
-					minDistance = currentMaxDistance;
+				if (!valid) continue;
+
+				cv::Mat rotatedMarker;
+				if (checkAllOrders) {
+					rotatedMarker = cv::Mat(4, 1, CV_32FC2);
+					for (int c = 0; c < 4; c++)
+						rotatedMarker.ptr< cv::Point2f >()[c] =
+						_rejectedCorners.getMat(j).ptr< cv::Point2f >()[(c + 4 + validRot) % 4];
 				}
-				if (!checkAllOrders) break;
+				else rotatedMarker = _rejectedCorners.getMat(j);
+
+				int codeDistance = 0;
+
+				if (errorCorrectionRate >= 0) {
+
+					cv::Mat bits = _extractBits(
+						grey, rotatedMarker, dictionary.markerSize, params.markerBorderBits,
+						params.perspectiveRemovePixelPerCell,
+						params.perspectiveRemoveIgnoredMarginPerCell, params.minOtsuStdDev);
+
+					cv::Mat onlyBits =
+						bits.rowRange(params.markerBorderBits, bits.rows - params.markerBorderBits)
+						.colRange(params.markerBorderBits, bits.rows - params.markerBorderBits);
+
+					codeDistance =
+						dictionary.getDistanceToId(onlyBits, undetectedMarkersIds[i], false);
+				}
+
+				if (errorCorrectionRate < 0 || codeDistance < maxCorrectionRecalculated) {
+					closestCandidateIdx = j;
+					closestCandidateDistance = minDistance;
+					closestRotatedMarker = rotatedMarker;
+				}
 			}
 
-			if (!valid) continue;
+			if (closestCandidateIdx >= 0) {
 
-			cv::Mat rotatedMarker;
-			if (checkAllOrders) {
-				rotatedMarker = cv::Mat(4, 1, CV_32FC2);
-				for (int c = 0; c < 4; c++)
-					rotatedMarker.ptr< cv::Point2f >()[c] =
-					_rejectedCorners.getMat(j).ptr< cv::Point2f >()[(c + 4 + validRot) % 4];
-			}
-			else rotatedMarker = _rejectedCorners.getMat(j);
+				if (params.doCornerRefinement) {
+					CV_Assert(params.cornerRefinementWinSize > 0 &&
+						params.cornerRefinementMaxIterations > 0 &&
+						params.cornerRefinementMinAccuracy > 0);
+					cornerSubPix(grey, closestRotatedMarker,
+						cv::Size(params.cornerRefinementWinSize,
+						params.cornerRefinementWinSize),
+						cv::Size(-1, -1),
+						cv::TermCriteria(cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS,
+						params.cornerRefinementMaxIterations,
+						params.cornerRefinementMinAccuracy));
+				}
 
-			int codeDistance = 0;
+				alreadyIdentified[closestCandidateIdx] = true;
 
-			if (errorCorrectionRate >= 0) {
+				finalAcceptedCorners.push_back(closestRotatedMarker);
+				finalAcceptedIds.push_back(undetectedMarkersIds[i]);
 
-				cv::Mat bits = _extractBits(
-					grey, rotatedMarker, dictionary.markerSize, params.markerBorderBits,
-					params.perspectiveRemovePixelPerCell,
-					params.perspectiveRemoveIgnoredMarginPerCell, params.minOtsuStdDev);
-
-				cv::Mat onlyBits =
-					bits.rowRange(params.markerBorderBits, bits.rows - params.markerBorderBits)
-					.colRange(params.markerBorderBits, bits.rows - params.markerBorderBits);
-
-				codeDistance =
-					dictionary.getDistanceToId(onlyBits, undetectedMarkersIds[i], false);
-			}
-
-			if (errorCorrectionRate < 0 || codeDistance < maxCorrectionRecalculated) {
-				closestCandidateIdx = j;
-				closestCandidateDistance = minDistance;
-				closestRotatedMarker = rotatedMarker;
+				recoveredIdxs.push_back(closestCandidateIdx);
 			}
 		}
 
-		if (closestCandidateIdx >= 0) {
+		if (finalAcceptedIds.size() != _detectedIds.total()) {
+			_detectedCorners.clear();
+			_detectedIds.clear();
 
-			if (params.doCornerRefinement) {
-				CV_Assert(params.cornerRefinementWinSize > 0 &&
-					params.cornerRefinementMaxIterations > 0 &&
-					params.cornerRefinementMinAccuracy > 0);
-				cornerSubPix(grey, closestRotatedMarker,
-					cv::Size(params.cornerRefinementWinSize,
-					params.cornerRefinementWinSize),
+			_detectedIds.create((int)finalAcceptedIds.size(), 1, CV_32SC1);
+			for (unsigned int i = 0; i < finalAcceptedIds.size(); i++)
+				_detectedIds.getMat().ptr< int >(0)[i] = finalAcceptedIds[i];
+
+			_detectedCorners.create((int)finalAcceptedCorners.size(), 1, CV_32FC2);
+			for (unsigned int i = 0; i < finalAcceptedCorners.size(); i++) {
+				_detectedCorners.create(4, 1, CV_32FC2, i, true);
+				for (int j = 0; j < 4; j++) {
+					_detectedCorners.getMat(i).ptr< cv::Point2f >()[j] =
+						finalAcceptedCorners[i].ptr< cv::Point2f >()[j];
+				}
+			}
+
+			std::vector< cv::Mat > finalRejected;
+			for (unsigned int i = 0; i < alreadyIdentified.size(); i++) {
+				if (!alreadyIdentified[i]) {
+					finalRejected.push_back(_rejectedCorners.getMat(i).clone());
+				}
+			}
+
+			_rejectedCorners.clear();
+			_rejectedCorners.create((int)finalRejected.size(), 1, CV_32FC2);
+			for (unsigned int i = 0; i < finalRejected.size(); i++) {
+				_rejectedCorners.create(4, 1, CV_32FC2, i, true);
+				for (int j = 0; j < 4; j++) {
+					_rejectedCorners.getMat(i).ptr< cv::Point2f >()[j] =
+						finalRejected[i].ptr< cv::Point2f >()[j];
+				}
+			}
+
+			if (_recoveredIdxs.needed()) {
+				_recoveredIdxs.create((int)recoveredIdxs.size(), 1, CV_32SC1);
+				for (unsigned int i = 0; i < recoveredIdxs.size(); i++) {
+					_recoveredIdxs.getMat().ptr< int >()[i] = recoveredIdxs[i];
+				}
+			}
+		}
+	}
+
+	int estimatePoseBoard(
+		cv::InputArrayOfArrays _corners,
+		cv::InputArray _ids,
+		cv::OutputArray _rvec,
+		cv::OutputArray _tvec) {
+
+		CV_Assert(_corners.total() == _ids.total());
+
+		cv::Mat objPoints, imgPoints;
+		_getBoardObjectAndImagePoints(_ids, _corners, imgPoints, objPoints);
+
+		CV_Assert(imgPoints.total() == objPoints.total());
+
+		if (objPoints.total() == 0)
+			return 0;
+
+		bool useExtrinsicGuess = true;
+		if (_rvec.empty() || _tvec.empty())
+		{
+			_rvec.create(3, 1, CV_64FC1);
+			_tvec.create(3, 1, CV_64FC1);
+			useExtrinsicGuess = false;
+		}
+		cv::solvePnP(objPoints, imgPoints, cameraMatrix, distCoeffs, _rvec, _tvec, useExtrinsicGuess);
+		return (int)objPoints.total() / 4;
+	}
+
+	bool estimatePoseChBoard(
+		cv::InputArray _chCorners,
+		cv::InputArray _chIds,
+		cv::OutputArray _rvec,
+		cv::OutputArray _tvec) {
+
+		CV_Assert((_chCorners.getMat().total() == _chIds.getMat().total()));
+
+		if (_chIds.getMat().total() < 4) return false;
+
+		std::vector< cv::Point3f > objPoints;
+		objPoints.reserve(_chIds.getMat().total());
+		for (unsigned int i = 0; i < _chIds.getMat().total(); i++) {
+			int currId = _chIds.getMat().at< int >(i);
+			CV_Assert(currId >= 0 && currId < (int)chBoard->chessboardCorners.size());
+			objPoints.push_back(chBoard->chessboardCorners[currId]);
+		}
+
+		if (!_arePointsEnoughForPoseEstimation(objPoints)) return false;
+
+		cv::solvePnP(objPoints, _chCorners, cameraMatrix, distCoeffs, _rvec, _tvec);
+
+		return true;
+	}
+
+	int interpolateCornersCh(
+		cv::InputArrayOfArrays _markerCorners,
+		cv::InputArray _markerIds,
+		cv::InputArray _image,
+		cv::OutputArray _chCorners,
+		cv::OutputArray _chIds) {
+
+		if (cameraMatrix.total() != 0)
+			return _interpolateCornersChApproxCalib(
+			_markerCorners, _markerIds, _image, _chCorners, _chIds);
+		else
+			return _interpolateCornersChLocalHom(
+			_markerCorners, _markerIds, _image, _chCorners, _chIds);
+	}
+
+	double calibrateCameraCh(
+		cv::InputArrayOfArrays _chCorners,
+		cv::InputArrayOfArrays _chIds,
+		cv::Size imageSize,
+		cv::OutputArrayOfArrays _rvecs = cv::noArray(),
+		cv::OutputArrayOfArrays _tvecs = cv::noArray(),
+		int flags = 0,
+		cv::TermCriteria criteria = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON)) {
+
+		CV_Assert(_chIds.total() > 0 && (_chIds.total() == _chCorners.total()));
+
+		std::vector< std::vector< cv::Point3f > > allObjPoints;
+		allObjPoints.resize(_chIds.total());
+		for (unsigned int i = 0; i < _chIds.total(); i++) {
+			unsigned int nCorners = (unsigned int)_chIds.getMat(i).total();
+			CV_Assert(nCorners > 0 && nCorners == _chCorners.getMat(i).total());
+			allObjPoints[i].reserve(nCorners);
+
+			for (unsigned int j = 0; j < nCorners; j++) {
+				int pointId = _chIds.getMat(i).at< int >(j);
+				CV_Assert(pointId >= 0 && pointId < (int)chBoard->chessboardCorners.size());
+				allObjPoints[i].push_back(chBoard->chessboardCorners[pointId]);
+			}
+		}
+
+		return calibrateCamera(allObjPoints, _chCorners, imageSize, cameraMatrix, distCoeffs,
+			_rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
+	}
+
+	double calibrateCameraAr(
+		cv::InputArrayOfArrays _corners,
+		cv::InputArray _ids,
+		cv::InputArray _counter,
+		cv::Size imageSize,
+		cv::OutputArrayOfArrays _rvecs = cv::noArray(),
+		cv::OutputArrayOfArrays _tvecs = cv::noArray(),
+		int flags = 0,
+		cv::TermCriteria criteria = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON)) {
+
+		std::vector< cv::Mat > processedObjectPoints, processedImagePoints;
+		size_t nFrames = _counter.total();
+		int markerCounter = 0;
+		for (size_t frame = 0; frame < nFrames; frame++) {
+			int nMarkersInThisFrame = _counter.getMat().ptr< int >()[frame];
+			std::vector< cv::Mat > thisFrameCorners;
+			std::vector< int > thisFrameIds;
+
+			CV_Assert(nMarkersInThisFrame > 0);
+
+			thisFrameCorners.reserve((size_t)nMarkersInThisFrame);
+			thisFrameIds.reserve((size_t)nMarkersInThisFrame);
+			for (int j = markerCounter; j < markerCounter + nMarkersInThisFrame; j++) {
+				thisFrameCorners.push_back(_corners.getMat(j));
+				thisFrameIds.push_back(_ids.getMat().ptr< int >()[j]);
+			}
+			markerCounter += nMarkersInThisFrame;
+			cv::Mat currentImgPoints, currentObjPoints;
+			_getBoardObjectAndImagePoints(
+				thisFrameIds, thisFrameCorners, currentImgPoints, currentObjPoints);
+			if (currentImgPoints.total() > 0 && currentObjPoints.total() > 0) {
+				processedImagePoints.push_back(currentImgPoints);
+				processedObjectPoints.push_back(currentObjPoints);
+			}
+		}
+
+		return cv::calibrateCamera(processedObjectPoints, processedImagePoints, imageSize, cameraMatrix,
+			distCoeffs, _rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
+	}
+
+private:
+
+	class DetectInitialCandidatesParallel : public cv::ParallelLoopBody {
+	public:
+		DetectInitialCandidatesParallel(const cv::Mat *_grey,
+			std::vector< std::vector< std::vector< cv::Point2f > > > *_candidatesArrays,
+			std::vector< std::vector< std::vector< cv::Point > > > *_contoursArrays,
+			const cv::Ptr<DetectorParameters> &_params)
+			: grey(_grey), candidatesArrays(_candidatesArrays), contoursArrays(_contoursArrays),
+			params(_params) {}
+
+		void operator()(const cv::Range &range) const {
+			const int begin = range.start;
+			const int end = range.end;
+
+			for (int i = begin; i < end; i++) {
+				int currScale =
+					params->adaptiveThreshWinSizeMin + i * params->adaptiveThreshWinSizeStep;
+
+				cv::Mat thresh;
+				_threshold(*grey, thresh, currScale, params->adaptiveThreshConstant);
+
+				_findMarkerContours(thresh, (*candidatesArrays)[i], (*contoursArrays)[i],
+					params->minMarkerPerimeterRate, params->maxMarkerPerimeterRate,
+					params->polygonalApproxAccuracyRate, params->minCornerDistanceRate,
+					params->minDistanceToBorder);
+			}
+		}
+
+	private:
+		DetectInitialCandidatesParallel &operator=(const DetectInitialCandidatesParallel &);
+
+		static void _threshold(cv::InputArray _in, cv::OutputArray _out, int winSize, double constant) {
+			CV_Assert(winSize >= 3);
+			if (winSize % 2 == 0) winSize++;
+			adaptiveThreshold(_in, _out, 255, cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY_INV, winSize, constant);
+		}
+
+		static void _findMarkerContours(
+			cv::InputArray _in,
+			std::vector< std::vector< cv::Point2f > > &candidates,
+			std::vector< std::vector< cv::Point > > &contoursOut, double minPerimeterRate,
+			double maxPerimeterRate, double accuracyRate,
+			double minCornerDistanceRate, int minDistanceToBorder) {
+
+			CV_Assert(minPerimeterRate > 0 && maxPerimeterRate > 0 && accuracyRate > 0 &&
+				minCornerDistanceRate >= 0 && minDistanceToBorder >= 0);
+
+			unsigned int minPerimeterPixels =
+				(unsigned int)(minPerimeterRate * std::max(_in.getMat().cols, _in.getMat().rows));
+			unsigned int maxPerimeterPixels =
+				(unsigned int)(maxPerimeterRate * std::max(_in.getMat().cols, _in.getMat().rows));
+
+			cv::Mat contoursImg;
+			_in.getMat().copyTo(contoursImg);
+			std::vector< std::vector< cv::Point > > contours;
+			cv::findContours(contoursImg, contours, cv::RETR_LIST, cv::CHAIN_APPROX_NONE);
+
+			for (unsigned int i = 0; i < contours.size(); i++) {
+
+				if (contours[i].size() < minPerimeterPixels || contours[i].size() > maxPerimeterPixels)
+					continue;
+
+				std::vector< cv::Point > approxCurve;
+				cv::approxPolyDP(contours[i], approxCurve, double(contours[i].size()) * accuracyRate, true);
+				if (approxCurve.size() != 4 || !cv::isContourConvex(approxCurve)) continue;
+
+				double minDistSq =
+					std::max(contoursImg.cols, contoursImg.rows)
+					* std::max(contoursImg.cols, contoursImg.rows);
+				for (int j = 0; j < 4; j++) {
+					double d = (double)(approxCurve[j].x - approxCurve[(j + 1) % 4].x) *
+						(double)(approxCurve[j].x - approxCurve[(j + 1) % 4].x) +
+						(double)(approxCurve[j].y - approxCurve[(j + 1) % 4].y) *
+						(double)(approxCurve[j].y - approxCurve[(j + 1) % 4].y);
+					minDistSq = std::min(minDistSq, d);
+				}
+				double minCornerDistancePixels = double(contours[i].size()) * minCornerDistanceRate;
+				if (minDistSq < minCornerDistancePixels * minCornerDistancePixels) continue;
+
+				bool tooNearBorder = false;
+				for (int j = 0; j < 4; j++) {
+					if (approxCurve[j].x < minDistanceToBorder || approxCurve[j].y < minDistanceToBorder ||
+						approxCurve[j].x > contoursImg.cols - 1 - minDistanceToBorder ||
+						approxCurve[j].y > contoursImg.rows - 1 - minDistanceToBorder)
+						tooNearBorder = true;
+				}
+				if (tooNearBorder) continue;
+
+				std::vector< cv::Point2f > currentCandidate;
+				currentCandidate.resize(4);
+				for (int j = 0; j < 4; j++) {
+					currentCandidate[j] = cv::Point2f((float)approxCurve[j].x, (float)approxCurve[j].y);
+				}
+				candidates.push_back(currentCandidate);
+				contoursOut.push_back(contours[i]);
+			}
+		}
+
+		const cv::Mat *grey;
+		std::vector< std::vector< std::vector< cv::Point2f > > > *candidatesArrays;
+		std::vector< std::vector< std::vector< cv::Point > > > *contoursArrays;
+		const cv::Ptr<DetectorParameters> &params;
+	};
+
+	class IdentifyCandidatesParallel : public cv::ParallelLoopBody {
+	public:
+		IdentifyCandidatesParallel(
+			const cv::Mat *_grey,
+			cv::InputArrayOfArrays _candidates,
+			cv::InputArrayOfArrays _contours,
+			cv::Ptr<Dictionary> &_dictionary,
+			std::vector< int > *_idsTmp,
+			std::vector< char > *_validCandidates,
+			const cv::Ptr<DetectorParameters> &_params)
+			: grey(_grey), candidates(_candidates), contours(_contours), dictionary(_dictionary),
+			idsTmp(_idsTmp), validCandidates(_validCandidates), params(_params) {}
+
+		void operator()(const cv::Range &range) const {
+			const int begin = range.start;
+			const int end = range.end;
+
+			for (int i = begin; i < end; i++) {
+				int currId;
+				cv::Mat currentCandidate = candidates.getMat(i);
+				if (_identifyOneCandidate(dictionary, *grey, currentCandidate, currId, params)) {
+					(*validCandidates)[i] = 1;
+					(*idsTmp)[i] = currId;
+				}
+			}
+		}
+
+	private:
+		IdentifyCandidatesParallel &operator=(const IdentifyCandidatesParallel &);
+
+		static bool _identifyOneCandidate(
+			cv::Ptr<Dictionary> &dictionary,
+			cv::InputArray _image,
+			cv::InputOutputArray _corners,
+			int &idx,
+			const cv::Ptr<DetectorParameters> &params) {
+
+			CV_Assert(_corners.total() == 4);
+			CV_Assert(_image.getMat().total() != 0);
+			CV_Assert(params->markerBorderBits > 0);
+
+			cv::Mat candidateBits =
+				_extractBits(_image, _corners, dictionary->markerSize, params->markerBorderBits,
+				params->perspectiveRemovePixelPerCell,
+				params->perspectiveRemoveIgnoredMarginPerCell, params->minOtsuStdDev);
+
+			int maximumErrorsInBorder =
+				int(dictionary->markerSize * dictionary->markerSize * params->maxErroneousBitsInBorderRate);
+			int borderErrors =
+				_getBorderErrors(candidateBits, dictionary->markerSize, params->markerBorderBits);
+			if (borderErrors > maximumErrorsInBorder) return false;
+
+			cv::Mat onlyBits =
+				candidateBits.rowRange(params->markerBorderBits,
+				candidateBits.rows - params->markerBorderBits)
+				.colRange(params->markerBorderBits, candidateBits.rows - params->markerBorderBits);
+
+			int rotation;
+			if (!dictionary->identify(onlyBits, idx, rotation, params->errorCorrectionRate))
+				return false;
+			else {
+
+				if (rotation != 0) {
+					cv::Mat copyPoints = _corners.getMat().clone();
+					for (int j = 0; j < 4; j++)
+						_corners.getMat().ptr< cv::Point2f >(0)[j] =
+						copyPoints.ptr< cv::Point2f >(0)[(j + 4 - rotation) % 4];
+				}
+				return true;
+			}
+		}
+
+		static int _getBorderErrors(const cv::Mat &bits, int markerSize, int borderSize) {
+
+			int sizeWithBorders = markerSize + 2 * borderSize;
+
+			CV_Assert(markerSize > 0 && bits.cols == sizeWithBorders && bits.rows == sizeWithBorders);
+
+			int totalErrors = 0;
+			for (int y = 0; y < sizeWithBorders; y++) {
+				for (int k = 0; k < borderSize; k++) {
+					if (bits.ptr< unsigned char >(y)[k] != 0) totalErrors++;
+					if (bits.ptr< unsigned char >(y)[sizeWithBorders - 1 - k] != 0) totalErrors++;
+				}
+			}
+			for (int x = borderSize; x < sizeWithBorders - borderSize; x++) {
+				for (int k = 0; k < borderSize; k++) {
+					if (bits.ptr< unsigned char >(k)[x] != 0) totalErrors++;
+					if (bits.ptr< unsigned char >(sizeWithBorders - 1 - k)[x] != 0) totalErrors++;
+				}
+			}
+			return totalErrors;
+		}
+
+		const cv::Mat *grey;
+		cv::InputArrayOfArrays candidates, contours;
+		cv::Ptr<Dictionary> &dictionary;
+		std::vector< int > *idsTmp;
+		std::vector< char > *validCandidates;
+		const cv::Ptr<DetectorParameters> &params;
+	};
+
+	class MarkerSubpixelParallel : public cv::ParallelLoopBody {
+	public:
+		MarkerSubpixelParallel(
+			const cv::Mat *_grey,
+			cv::OutputArrayOfArrays _corners,
+			const cv::Ptr<DetectorParameters> &_params)
+			: grey(_grey), corners(_corners), params(_params) {}
+
+		void operator()(const cv::Range &range) const {
+			const int begin = range.start;
+			const int end = range.end;
+
+			for (int i = begin; i < end; i++) {
+				cv::cornerSubPix(
+					*grey,
+					corners.getMat(i),
+					cv::Size(params->cornerRefinementWinSize,
+					params->cornerRefinementWinSize),
 					cv::Size(-1, -1),
 					cv::TermCriteria(cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS,
-					params.cornerRefinementMaxIterations,
-					params.cornerRefinementMinAccuracy));
+					params->cornerRefinementMaxIterations,
+					params->cornerRefinementMinAccuracy));
 			}
+		}
 
-			alreadyIdentified[closestCandidateIdx] = true;
+	private:
+		MarkerSubpixelParallel &operator=(const MarkerSubpixelParallel &);
 
-			finalAcceptedCorners.push_back(closestRotatedMarker);
-			finalAcceptedIds.push_back(undetectedMarkersIds[i]);
+		const cv::Mat *grey;
+		cv::OutputArrayOfArrays corners;
+		const cv::Ptr<DetectorParameters> &params;
+	};
 
-			recoveredIdxs.push_back(closestCandidateIdx);
+	class ChSubpixelParallel : public cv::ParallelLoopBody {
+	public:
+		ChSubpixelParallel(
+			const cv::Mat *_grey,
+			std::vector< cv::Point2f > *_filteredChessboardImgPoints,
+			std::vector< cv::Size > *_filteredWinSizes,
+			const cv::Ptr<DetectorParameters> &_params)
+			: grey(_grey), filteredChessboardImgPoints(_filteredChessboardImgPoints),
+			filteredWinSizes(_filteredWinSizes), params(_params) {}
+
+		void operator()(const cv::Range &range) const {
+			const int begin = range.start;
+			const int end = range.end;
+
+			for (int i = begin; i < end; i++) {
+				std::vector< cv::Point2f > in;
+				in.push_back((*filteredChessboardImgPoints)[i]);
+				cv::Size winSize = (*filteredWinSizes)[i];
+				if (winSize.height == -1 || winSize.width == -1)
+					winSize = cv::Size(params->cornerRefinementWinSize, params->cornerRefinementWinSize);
+
+				cornerSubPix(*grey, in, winSize, cv::Size(),
+					cv::TermCriteria(cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS,
+					params->cornerRefinementMaxIterations,
+					params->cornerRefinementMinAccuracy));
+
+				(*filteredChessboardImgPoints)[i] = in[0];
+			}
+		}
+
+	private:
+		ChSubpixelParallel &operator=(const ChSubpixelParallel &);
+
+		const cv::Mat *grey;
+		std::vector< cv::Point2f > *filteredChessboardImgPoints;
+		std::vector< cv::Size > *filteredWinSizes;
+		const cv::Ptr<DetectorParameters> &params;
+	};
+
+	static cv::Mat _extractBits(
+		cv::InputArray _image,
+		cv::InputArray _corners,
+		int markerSize,
+		int markerBorderBits,
+		int cellSize,
+		double cellMarginRate,
+		double minStdDevOtsu) {
+
+		CV_Assert(_image.getMat().channels() == 1);
+		CV_Assert(_corners.total() == 4);
+		CV_Assert(markerBorderBits > 0 && cellSize > 0 && cellMarginRate >= 0 && cellMarginRate <= 1);
+		CV_Assert(minStdDevOtsu >= 0);
+
+		int markerSizeWithBorders = markerSize + 2 * markerBorderBits;
+		int cellMarginPixels = int(cellMarginRate * cellSize);
+
+		cv::Mat resultImg;
+		int resultImgSize = markerSizeWithBorders * cellSize;
+		cv::Mat resultImgCorners(4, 1, CV_32FC2);
+		resultImgCorners.ptr< cv::Point2f >(0)[0] = cv::Point2f(0, 0);
+		resultImgCorners.ptr< cv::Point2f >(0)[1] = cv::Point2f((float)resultImgSize - 1, 0);
+		resultImgCorners.ptr< cv::Point2f >(0)[2] =
+			cv::Point2f((float)resultImgSize - 1, (float)resultImgSize - 1);
+		resultImgCorners.ptr< cv::Point2f >(0)[3] = cv::Point2f(0, (float)resultImgSize - 1);
+
+		cv::Mat transformation = getPerspectiveTransform(_corners, resultImgCorners);
+		cv::warpPerspective(_image, resultImg, transformation, cv::Size(resultImgSize, resultImgSize),
+			cv::INTER_NEAREST);
+
+		cv::Mat bits(markerSizeWithBorders, markerSizeWithBorders, CV_8UC1, cv::Scalar::all(0));
+
+		cv::Mat mean, stddev;
+
+		cv::Mat innerRegion = resultImg.colRange(cellSize / 2, resultImg.cols - cellSize / 2)
+			.rowRange(cellSize / 2, resultImg.rows - cellSize / 2);
+		cv::meanStdDev(innerRegion, mean, stddev);
+		if (stddev.ptr< double >(0)[0] < minStdDevOtsu) {
+
+			if (mean.ptr< double >(0)[0] > 127)
+				bits.setTo(1);
+			else
+				bits.setTo(0);
+			return bits;
+		}
+
+		cv::threshold(resultImg, resultImg, 125, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+
+		for (int y = 0; y < markerSizeWithBorders; y++) {
+			for (int x = 0; x < markerSizeWithBorders; x++) {
+				int Xstart = x * (cellSize)+cellMarginPixels;
+				int Ystart = y * (cellSize)+cellMarginPixels;
+				cv::Mat square = resultImg(cv::Rect(Xstart, Ystart, cellSize - 2 * cellMarginPixels,
+					cellSize - 2 * cellMarginPixels));
+
+				size_t nZ = (size_t)cv::countNonZero(square);
+				if (nZ > square.total() / 2) bits.at< unsigned char >(y, x) = 1;
+			}
+		}
+
+		return bits;
+	}
+
+	void _detectInitialCandidates(
+		const cv::Mat &grey,
+		std::vector< std::vector< cv::Point2f > > &candidates,
+		std::vector< std::vector< cv::Point > > &contours) {
+
+		CV_Assert(params->adaptiveThreshWinSizeMin >= 3 && params->adaptiveThreshWinSizeMax >= 3);
+		CV_Assert(params->adaptiveThreshWinSizeMax >= params->adaptiveThreshWinSizeMin);
+		CV_Assert(params->adaptiveThreshWinSizeStep > 0);
+
+		int nScales = (params->adaptiveThreshWinSizeMax - params->adaptiveThreshWinSizeMin) /
+			params->adaptiveThreshWinSizeStep + 1;
+
+		std::vector< std::vector< std::vector< cv::Point2f > > > candidatesArrays((size_t)nScales);
+		std::vector< std::vector< std::vector< cv::Point > > > contoursArrays((size_t)nScales);
+
+		cv::parallel_for_(cv::Range(0, nScales), DetectInitialCandidatesParallel(&grey, &candidatesArrays,
+			&contoursArrays, params));
+
+		for (int i = 0; i < nScales; i++) {
+			for (unsigned int j = 0; j < candidatesArrays[i].size(); j++) {
+				candidates.push_back(candidatesArrays[i][j]);
+				contours.push_back(contoursArrays[i][j]);
+			}
 		}
 	}
 
-	if (finalAcceptedIds.size() != _detectedIds.total()) {
-		_detectedCorners.clear();
-		_detectedIds.clear();
+	static void _reorderCandidatesCorners(std::vector< std::vector< cv::Point2f > > &candidates) {
 
-		_detectedIds.create((int)finalAcceptedIds.size(), 1, CV_32SC1);
-		for (unsigned int i = 0; i < finalAcceptedIds.size(); i++)
-			_detectedIds.getMat().ptr< int >(0)[i] = finalAcceptedIds[i];
+		for (unsigned int i = 0; i < candidates.size(); i++) {
+			double dx1 = candidates[i][1].x - candidates[i][0].x;
+			double dy1 = candidates[i][1].y - candidates[i][0].y;
+			double dx2 = candidates[i][2].x - candidates[i][0].x;
+			double dy2 = candidates[i][2].y - candidates[i][0].y;
+			double crossProduct = (dx1 * dy2) - (dy1 * dx2);
 
-		_detectedCorners.create((int)finalAcceptedCorners.size(), 1, CV_32FC2);
-		for (unsigned int i = 0; i < finalAcceptedCorners.size(); i++) {
-			_detectedCorners.create(4, 1, CV_32FC2, i, true);
-			for (int j = 0; j < 4; j++) {
-				_detectedCorners.getMat(i).ptr< cv::Point2f >()[j] =
-					finalAcceptedCorners[i].ptr< cv::Point2f >()[j];
-			}
-		}
-
-		std::vector< cv::Mat > finalRejected;
-		for (unsigned int i = 0; i < alreadyIdentified.size(); i++) {
-			if (!alreadyIdentified[i]) {
-				finalRejected.push_back(_rejectedCorners.getMat(i).clone());
-			}
-		}
-
-		_rejectedCorners.clear();
-		_rejectedCorners.create((int)finalRejected.size(), 1, CV_32FC2);
-		for (unsigned int i = 0; i < finalRejected.size(); i++) {
-			_rejectedCorners.create(4, 1, CV_32FC2, i, true);
-			for (int j = 0; j < 4; j++) {
-				_rejectedCorners.getMat(i).ptr< cv::Point2f >()[j] =
-					finalRejected[i].ptr< cv::Point2f >()[j];
-			}
-		}
-
-		if (_recoveredIdxs.needed()) {
-			_recoveredIdxs.create((int)recoveredIdxs.size(), 1, CV_32SC1);
-			for (unsigned int i = 0; i < recoveredIdxs.size(); i++) {
-				_recoveredIdxs.getMat().ptr< int >()[i] = recoveredIdxs[i];
+			if (crossProduct < 0.0) {
+				std::swap(candidates[i][1], candidates[i][3]);
 			}
 		}
 	}
-}
 
-void drawDetectedMarkers(
-	cv::InputOutputArray _image,
-	cv::InputArrayOfArrays _corners,
-	cv::InputArray _ids,
-	cv::Scalar borderColor) {
+	static void _filterTooCloseCandidates(
+		const std::vector< std::vector< cv::Point2f > > &candidatesIn,
+		std::vector< std::vector< cv::Point2f > > &candidatesOut,
+		const std::vector< std::vector< cv::Point > > &contoursIn,
+		std::vector< std::vector< cv::Point > > &contoursOut,
+		double minMarkerDistanceRate) {
 
-	CV_Assert(_image.getMat().total() != 0 &&
-		(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
-	CV_Assert((_corners.total() == _ids.total()) || _ids.total() == 0);
+		CV_Assert(minMarkerDistanceRate >= 0);
 
-	cv::Scalar textColor, cornerColor;
-	textColor = cornerColor = borderColor;
-	std::swap(textColor.val[0], textColor.val[1]);
-	std::swap(cornerColor.val[1], cornerColor.val[2]);
+		std::vector< std::pair< int, int > > nearCandidates;
+		for (unsigned int i = 0; i < candidatesIn.size(); i++) {
+			for (unsigned int j = i + 1; j < candidatesIn.size(); j++) {
 
-	int nMarkers = (int)_corners.total();
-	for (int i = 0; i < nMarkers; i++) {
-		cv::Mat currentMarker = _corners.getMat(i);
-		CV_Assert(currentMarker.total() == 4 && currentMarker.type() == CV_32FC2);
+				int minimumPerimeter = std::min((int)contoursIn[i].size(), (int)contoursIn[j].size());
 
-		for (int j = 0; j < 4; j++) {
-			cv::Point2f p0, p1;
-			p0 = currentMarker.ptr< cv::Point2f >(0)[j];
-			p1 = currentMarker.ptr< cv::Point2f >(0)[(j + 1) % 4];
-			cv::line(_image, p0, p1, borderColor, 1);
-		}
+				for (int fc = 0; fc < 4; fc++) {
+					double distSq = 0;
+					for (int c = 0; c < 4; c++) {
 
-		cv::rectangle(_image, currentMarker.ptr< cv::Point2f >(0)[0] - cv::Point2f(3, 3),
-			currentMarker.ptr< cv::Point2f >(0)[0] + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
+						int modC = (c + fc) % 4;
+						distSq += (candidatesIn[i][modC].x - candidatesIn[j][c].x) *
+							(candidatesIn[i][modC].x - candidatesIn[j][c].x) +
+							(candidatesIn[i][modC].y - candidatesIn[j][c].y) *
+							(candidatesIn[i][modC].y - candidatesIn[j][c].y);
+					}
+					distSq /= 4.;
 
-		if (_ids.total() != 0) {
-			cv::Point2f cent(0, 0);
-			for (int p = 0; p < 4; p++)
-				cent += currentMarker.ptr< cv::Point2f >(0)[p];
-			cent = cent / 4.;
-			std::stringstream s;
-			s << "id=" << _ids.getMat().ptr< int >(0)[i];
-			cv::putText(_image, s.str(), cent, cv::FONT_HERSHEY_SIMPLEX, 0.5, textColor, 1, cv::LINE_AA);
-		}
-	}
-}
-
-void drawAxis(
-	cv::InputOutputArray _image,
-	cv::InputArray _cameraMatrix,
-	cv::InputArray _distCoeffs,
-	cv::InputArray _rvec,
-	cv::InputArray _tvec,
-	float length) {
-
-	CV_Assert(_image.getMat().total() != 0 &&
-		(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
-	CV_Assert(length > 0);
-
-	std::vector< cv::Point3f > axisPoints;
-	axisPoints.push_back(cv::Point3f(0, 0, 0));
-	axisPoints.push_back(cv::Point3f(length, 0, 0));
-	axisPoints.push_back(cv::Point3f(0, length, 0));
-	axisPoints.push_back(cv::Point3f(0, 0, length));
-	std::vector< cv::Point2f > imagePoints;
-	cv::projectPoints(axisPoints, _rvec, _tvec, _cameraMatrix, _distCoeffs, imagePoints);
-
-	cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3);
-	cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3);
-	cv::line(_image, imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3);
-}
-
-double calibrateCameraAruco(
-	cv::InputArrayOfArrays _corners,
-	cv::InputArray _ids,
-	cv::InputArray _counter,
-	cv::Ptr<Board> &board,
-	cv::Size imageSize,
-	cv::InputOutputArray _cameraMatrix,
-	cv::InputOutputArray _distCoeffs,
-	cv::OutputArrayOfArrays _rvecs = cv::noArray(),
-	cv::OutputArrayOfArrays _tvecs = cv::noArray(),
-	int flags = 0,
-	cv::TermCriteria criteria = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON)) {
-
-	std::vector< cv::Mat > processedObjectPoints, processedImagePoints;
-	size_t nFrames = _counter.total();
-	int markerCounter = 0;
-	for (size_t frame = 0; frame < nFrames; frame++) {
-		int nMarkersInThisFrame = _counter.getMat().ptr< int >()[frame];
-		std::vector< cv::Mat > thisFrameCorners;
-		std::vector< int > thisFrameIds;
-
-		CV_Assert(nMarkersInThisFrame > 0);
-
-		thisFrameCorners.reserve((size_t)nMarkersInThisFrame);
-		thisFrameIds.reserve((size_t)nMarkersInThisFrame);
-		for (int j = markerCounter; j < markerCounter + nMarkersInThisFrame; j++) {
-			thisFrameCorners.push_back(_corners.getMat(j));
-			thisFrameIds.push_back(_ids.getMat().ptr< int >()[j]);
-		}
-		markerCounter += nMarkersInThisFrame;
-		cv::Mat currentImgPoints, currentObjPoints;
-		_getBoardObjectAndImagePoints(board, thisFrameIds, thisFrameCorners, currentImgPoints,
-			currentObjPoints);
-		if (currentImgPoints.total() > 0 && currentObjPoints.total() > 0) {
-			processedImagePoints.push_back(currentImgPoints);
-			processedObjectPoints.push_back(currentObjPoints);
-		}
-	}
-
-	return cv::calibrateCamera(processedObjectPoints, processedImagePoints, imageSize, _cameraMatrix,
-		_distCoeffs, _rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
-}
-
-static void _getMaximumSubPixWindowSizes(
-	cv::InputArrayOfArrays markerCorners,
-	cv::InputArray markerIds,
-	cv::InputArray chCorners,
-	cv::Ptr<ChBoard> &board,
-	std::vector< cv::Size > &sizes) {
-
-	unsigned int nChCorners = (unsigned int)chCorners.getMat().total();
-	sizes.resize(nChCorners, cv::Size(-1, -1));
-
-	for (unsigned int i = 0; i < nChCorners; i++) {
-		if (chCorners.getMat().at< cv::Point2f >(i) == cv::Point2f(-1, -1)) continue;
-		if (board->nearestMarkerIdx[i].size() == 0) continue;
-
-		double minDist = -1;
-		int counter = 0;
-
-		for (unsigned int j = 0; j < board->nearestMarkerIdx[i].size(); j++) {
-
-			int markerId = board->ids[board->nearestMarkerIdx[i][j]];
-			int markerIdx = -1;
-			for (unsigned int k = 0; k < markerIds.getMat().total(); k++) {
-				if (markerIds.getMat().at< int >(k) == markerId) {
-					markerIdx = k;
-					break;
+					double minMarkerDistancePixels = double(minimumPerimeter) * minMarkerDistanceRate;
+					if (distSq < minMarkerDistancePixels * minMarkerDistancePixels) {
+						nearCandidates.push_back(std::pair< int, int >(i, j));
+						break;
+					}
 				}
 			}
-			if (markerIdx == -1) continue;
-			cv::Point2f markerCorner =
-				markerCorners.getMat(markerIdx).at< cv::Point2f >(board->nearestMarkerCorners[i][j]);
-			cv::Point2f chCorner = chCorners.getMat().at< cv::Point2f >(i);
-			double dist = norm(markerCorner - chCorner);
-			if (minDist == -1) minDist = dist;
-			minDist = std::min(dist, minDist);
-			counter++;
 		}
 
-		if (counter == 0)
-			continue;
-		else {
+		std::vector< bool > toRemove(candidatesIn.size(), false);
+		for (unsigned int i = 0; i < nearCandidates.size(); i++) {
 
-			int winSizeInt = int(minDist - 2);
-			if (winSizeInt < 1) winSizeInt = 1;
-			if (winSizeInt > 10) winSizeInt = 10;
-			sizes[i] = cv::Size(winSizeInt, winSizeInt);
+			if (toRemove[nearCandidates[i].first] || toRemove[nearCandidates[i].second]) continue;
+			size_t perimeter1 = contoursIn[nearCandidates[i].first].size();
+			size_t perimeter2 = contoursIn[nearCandidates[i].second].size();
+			if (perimeter1 > perimeter2)
+				toRemove[nearCandidates[i].second] = true;
+			else
+				toRemove[nearCandidates[i].first] = true;
+		}
+
+		candidatesOut.clear();
+		unsigned long totalRemaining = 0;
+		for (unsigned int i = 0; i < toRemove.size(); i++)
+		if (!toRemove[i]) totalRemaining++;
+		candidatesOut.resize(totalRemaining);
+		contoursOut.resize(totalRemaining);
+		for (unsigned int i = 0, currIdx = 0; i < candidatesIn.size(); i++) {
+			if (toRemove[i]) continue;
+			candidatesOut[currIdx] = candidatesIn[i];
+			contoursOut[currIdx] = contoursIn[i];
+			currIdx++;
 		}
 	}
-}
 
-static unsigned int _filterCornersWithoutMinMarkers(
-	cv::Ptr<ChBoard> &_board,
-	cv::InputArray _allChCorners,
-	cv::InputArray _allChIds,
-	cv::InputArray _allArucoIds, int minMarkers,
-	cv::OutputArray _filteredChCorners,
-	cv::OutputArray _filteredChIds) {
+	void _detectCandidates(
+		cv::InputArray _grey, 
+		cv::OutputArrayOfArrays _candidates,
+		cv::OutputArrayOfArrays _contours) {
 
-	CV_Assert(minMarkers >= 0 && minMarkers <= 2);
+		cv::Mat grey = _grey.getMat();
+		CV_Assert(grey.total() != 0);
 
-	std::vector< cv::Point2f > filteredChCorners;
-	std::vector< int > filteredChIds;
+		std::vector< std::vector< cv::Point2f > > candidates;
+		std::vector< std::vector< cv::Point > > contours;
 
-	for (unsigned int i = 0; i < _allChIds.getMat().total(); i++) {
-		int currentChId = _allChIds.getMat().at< int >(i);
-		int totalMarkers = 0;
+		_detectInitialCandidates(grey, candidates, contours);
+		_reorderCandidatesCorners(candidates);
 
-		for (unsigned int m = 0; m < _board->nearestMarkerIdx[currentChId].size(); m++) {
-			int markerId = _board->ids[_board->nearestMarkerIdx[currentChId][m]];
+		std::vector< std::vector< cv::Point2f > > candidatesOut;
+		std::vector< std::vector< cv::Point > > contoursOut;
+		_filterTooCloseCandidates(candidates, candidatesOut, contours, contoursOut,
+			params->minMarkerDistanceRate);
+
+		_candidates.create((int)candidatesOut.size(), 1, CV_32FC2);
+		_contours.create((int)contoursOut.size(), 1, CV_32SC2);
+		for (int i = 0; i < (int)candidatesOut.size(); i++) {
+			_candidates.create(4, 1, CV_32FC2, i, true);
+			cv::Mat m = _candidates.getMat(i);
+			for (int j = 0; j < 4; j++)
+				m.ptr< cv::Vec2f >(0)[j] = candidatesOut[i][j];
+
+			_contours.create((int)contoursOut[i].size(), 1, CV_32SC2, i, true);
+			cv::Mat c = _contours.getMat(i);
+			for (unsigned int j = 0; j < contoursOut[i].size(); j++)
+				c.ptr< cv::Point2i >()[j] = contoursOut[i][j];
+		}
+	}
+
+	static void _copyVector2Output(
+		std::vector< cv::Mat > &vec, 
+		cv::OutputArrayOfArrays out) {
+
+		out.release();
+		out.create((int)vec.size(), 1, CV_32FC2);
+
+		if (out.isMatVector()) {
+			for (unsigned int i = 0; i < vec.size(); i++) {
+				out.create(4, 1, CV_32FC2, i, true);
+				cv::Mat &m = out.getMatRef(i);
+				vec[i].copyTo(m);
+			}
+		}
+		else if (out.isUMatVector()) {
+			for (unsigned int i = 0; i < vec.size(); i++) {
+				out.create(4, 1, CV_32FC2, i, true);
+				cv::UMat &m = out.getUMatRef(i);
+				vec[i].copyTo(m);
+			}
+		}
+		else if (out.kind() == cv::_OutputArray::STD_VECTOR_VECTOR){
+			for (unsigned int i = 0; i < vec.size(); i++) {
+				out.create(4, 1, CV_32FC2, i, true);
+				cv::Mat m = out.getMat(i);
+				vec[i].copyTo(m);
+			}
+		}
+		else {
+			CV_Error(cv::Error::StsNotImplemented,
+				"Only Mat vector, UMat vector, and vector<vector> OutputArrays are currently supported.");
+		}
+	}
+
+	void _identifyCandidates(
+		cv::InputArray _grey,
+		cv::InputArrayOfArrays _candidates,
+		cv::InputArrayOfArrays _contours,
+		cv::OutputArrayOfArrays _accepted,
+		cv::OutputArray _ids,
+		cv::OutputArrayOfArrays _rejected = cv::noArray()) {
+
+		int ncandidates = (int)_candidates.total();
+
+		std::vector< cv::Mat > accepted;
+		std::vector< cv::Mat > rejected;
+		std::vector< int > ids;
+
+		cv::Mat grey = _grey.getMat();
+		CV_Assert(grey.total() != 0);
+
+		std::vector< int > idsTmp(ncandidates, -1);
+		std::vector< char > validCandidates(ncandidates, 0);
+
+		cv::parallel_for_(cv::Range(0, ncandidates),
+			IdentifyCandidatesParallel(&grey, _candidates, _contours, dictionary, &idsTmp,
+			&validCandidates, params));
+
+		for (int i = 0; i < ncandidates; i++) {
+			if (validCandidates[i] == 1) {
+				accepted.push_back(_candidates.getMat(i));
+				ids.push_back(idsTmp[i]);
+			}
+			else {
+				rejected.push_back(_candidates.getMat(i));
+			}
+		}
+
+		_copyVector2Output(accepted, _accepted);
+
+		_ids.create((int)ids.size(), 1, CV_32SC1);
+		for (unsigned int i = 0; i < ids.size(); i++)
+			_ids.getMat().ptr< int >(0)[i] = ids[i];
+
+		if (_rejected.needed()) {
+			_copyVector2Output(rejected, _rejected);
+		}
+	}
+
+	static void _filterDetectedMarkers(
+		cv::InputArrayOfArrays _inCorners,
+		cv::InputArray _inIds,
+		cv::OutputArrayOfArrays _outCorners,
+		cv::OutputArray _outIds) {
+
+		CV_Assert(_inCorners.total() == _inIds.total());
+		if (_inCorners.total() == 0) return;
+
+		std::vector< bool > toRemove(_inCorners.total(), false);
+		bool atLeastOneRemove = false;
+
+		for (unsigned int i = 0; i < _inCorners.total() - 1; i++) {
+			for (unsigned int j = i + 1; j < _inCorners.total(); j++) {
+				if (_inIds.getMat().ptr< int >(0)[i] != _inIds.getMat().ptr< int >(0)[j]) continue;
+
+				bool inside = true;
+				for (unsigned int p = 0; p < 4; p++) {
+					cv::Point2f point = _inCorners.getMat(j).ptr< cv::Point2f >(0)[p];
+					if (cv::pointPolygonTest(_inCorners.getMat(i), point, false) < 0) {
+						inside = false;
+						break;
+					}
+				}
+				if (inside) {
+					toRemove[j] = true;
+					atLeastOneRemove = true;
+					continue;
+				}
+
+				inside = true;
+				for (unsigned int p = 0; p < 4; p++) {
+					cv::Point2f point = _inCorners.getMat(i).ptr< cv::Point2f >(0)[p];
+					if (pointPolygonTest(_inCorners.getMat(j), point, false) < 0) {
+						inside = false;
+						break;
+					}
+				}
+				if (inside) {
+					toRemove[i] = true;
+					atLeastOneRemove = true;
+					continue;
+				}
+			}
+		}
+
+		if (atLeastOneRemove) {
+			std::vector< cv::Mat > filteredCorners;
+			std::vector< int > filteredIds;
+
+			for (unsigned int i = 0; i < toRemove.size(); i++) {
+				if (!toRemove[i]) {
+					filteredCorners.push_back(_inCorners.getMat(i).clone());
+					filteredIds.push_back(_inIds.getMat().ptr< int >(0)[i]);
+				}
+			}
+
+			_outIds.create((int)filteredIds.size(), 1, CV_32SC1);
+			for (unsigned int i = 0; i < filteredIds.size(); i++)
+				_outIds.getMat().ptr< int >(0)[i] = filteredIds[i];
+
+			_outCorners.create((int)filteredCorners.size(), 1, CV_32FC2);
+			for (unsigned int i = 0; i < filteredCorners.size(); i++) {
+				_outCorners.create(4, 1, CV_32FC2, i, true);
+				filteredCorners[i].copyTo(_outCorners.getMat(i));
+			}
+		}
+	}
+
+	void _getBoardObjectAndImagePoints(
+		cv::InputArray _detectedIds,
+		cv::InputArrayOfArrays _detectedCorners,
+		cv::OutputArray _imgPoints,
+		cv::OutputArray _objPoints) {
+
+		CV_Assert(board->ids.size() == board->objPoints.size());
+		CV_Assert(_detectedIds.total() == _detectedCorners.total());
+
+		size_t nDetectedMarkers = _detectedIds.total();
+
+		std::vector< cv::Point3f > objPnts;
+		objPnts.reserve(nDetectedMarkers);
+
+		std::vector< cv::Point2f > imgPnts;
+		imgPnts.reserve(nDetectedMarkers);
+
+		for (unsigned int i = 0; i < nDetectedMarkers; i++) {
+			int currentId = _detectedIds.getMat().ptr< int >(0)[i];
+			for (unsigned int j = 0; j < board->ids.size(); j++) {
+				if (currentId == board->ids[j]) {
+					for (int p = 0; p < 4; p++) {
+						objPnts.push_back(board->objPoints[j][p]);
+						imgPnts.push_back(_detectedCorners.getMat(i).ptr< cv::Point2f >(0)[p]);
+					}
+				}
+			}
+		}
+
+		_objPoints.create((int)objPnts.size(), 1, CV_32FC3);
+		for (unsigned int i = 0; i < objPnts.size(); i++)
+			_objPoints.getMat().ptr< cv::Point3f >(0)[i] = objPnts[i];
+
+		_imgPoints.create((int)objPnts.size(), 1, CV_32FC2);
+		for (unsigned int i = 0; i < imgPnts.size(); i++)
+			_imgPoints.getMat().ptr< cv::Point2f >(0)[i] = imgPnts[i];
+	}
+
+	void _projectUndetectedMarkers(
+		cv::InputOutputArrayOfArrays _detectedCorners,
+		cv::InputOutputArray _detectedIds,
+		cv::OutputArrayOfArrays _undetectedMarkersProjectedCorners,
+		cv::OutputArray _undetectedMarkersIds) {
+
+		CV_Assert(board->objPoints.size() > 0);
+		CV_Assert(board->objPoints[0].size() > 0);
+		float boardZ = board->objPoints[0][0].z;
+		for (unsigned int i = 0; i < board->objPoints.size(); i++) {
+			for (unsigned int j = 0; j < board->objPoints[i].size(); j++) {
+				CV_Assert(boardZ == board->objPoints[i][j].z);
+			}
+		}
+
+		std::vector< cv::Point2f > detectedMarkersObj2DAll;
+		std::vector< cv::Point2f > imageCornersAll;
+		std::vector< std::vector< cv::Point2f > > undetectedMarkersObj2D;
+		std::vector< int > undetectedMarkersIds;
+
+		for (unsigned int j = 0; j < board->ids.size(); j++) {
 			bool found = false;
-			for (unsigned int k = 0; k < _allArucoIds.getMat().total(); k++) {
-				if (_allArucoIds.getMat().at< int >(k) == markerId) {
+			for (unsigned int i = 0; i < _detectedIds.total(); i++) {
+				if (_detectedIds.getMat().ptr< int >()[i] == board->ids[j]) {
+					for (int c = 0; c < 4; c++) {
+						imageCornersAll.push_back(_detectedCorners.getMat(i).ptr< cv::Point2f >()[c]);
+						detectedMarkersObj2DAll.push_back(
+							cv::Point2f(board->objPoints[j][c].x, board->objPoints[j][c].y));
+					}
 					found = true;
 					break;
 				}
 			}
-			if (found) totalMarkers++;
+			if (!found) {
+				undetectedMarkersObj2D.push_back(std::vector< cv::Point2f >());
+				for (int c = 0; c < 4; c++) {
+					undetectedMarkersObj2D.back().push_back(
+						cv::Point2f(board->objPoints[j][c].x, board->objPoints[j][c].y));
+				}
+				undetectedMarkersIds.push_back(board->ids[j]);
+			}
+		}
+		if (imageCornersAll.size() == 0) return;
+
+		cv::Mat transformation = cv::findHomography(detectedMarkersObj2DAll, imageCornersAll);
+
+		_undetectedMarkersProjectedCorners.create((int)undetectedMarkersIds.size(), 1, CV_32FC2);
+
+		for (unsigned int i = 0; i < undetectedMarkersObj2D.size(); i++) {
+			cv::Mat projectedMarker;
+			cv::perspectiveTransform(undetectedMarkersObj2D[i], projectedMarker, transformation);
+
+			_undetectedMarkersProjectedCorners.create(4, 1, CV_32FC2, i, true);
+			projectedMarker.copyTo(_undetectedMarkersProjectedCorners.getMat(i));
 		}
 
-		if (totalMarkers >= minMarkers) {
-			filteredChIds.push_back(currentChId);
-			filteredChCorners.push_back(_allChCorners.getMat().at< cv::Point2f >(i));
+		_undetectedMarkersIds.create((int)undetectedMarkersIds.size(), 1, CV_32SC1);
+		for (unsigned int i = 0; i < undetectedMarkersIds.size(); i++)
+			_undetectedMarkersIds.getMat().ptr< int >(0)[i] = undetectedMarkersIds[i];
+	}
+
+	void _getMaximumSubPixWindowSizes(
+		cv::InputArrayOfArrays markerCorners,
+		cv::InputArray markerIds,
+		cv::InputArray chCorners,
+		std::vector< cv::Size > &sizes) {
+
+		unsigned int nChCorners = (unsigned int)chCorners.getMat().total();
+		sizes.resize(nChCorners, cv::Size(-1, -1));
+
+		for (unsigned int i = 0; i < nChCorners; i++) {
+			if (chCorners.getMat().at< cv::Point2f >(i) == cv::Point2f(-1, -1)) continue;
+			if (chBoard->nearestMarkerIdx[i].size() == 0) continue;
+
+			double minDist = -1;
+			int counter = 0;
+
+			for (unsigned int j = 0; j < chBoard->nearestMarkerIdx[i].size(); j++) {
+
+				int markerId = chBoard->ids[chBoard->nearestMarkerIdx[i][j]];
+				int markerIdx = -1;
+				for (unsigned int k = 0; k < markerIds.getMat().total(); k++) {
+					if (markerIds.getMat().at< int >(k) == markerId) {
+						markerIdx = k;
+						break;
+					}
+				}
+				if (markerIdx == -1) continue;
+				cv::Point2f markerCorner =
+					markerCorners.getMat(markerIdx).at< cv::Point2f >(chBoard->nearestMarkerCorners[i][j]);
+				cv::Point2f chCorner = chCorners.getMat().at< cv::Point2f >(i);
+				double dist = norm(markerCorner - chCorner);
+				if (minDist == -1) minDist = dist;
+				minDist = std::min(dist, minDist);
+				counter++;
+			}
+
+			if (counter == 0)
+				continue;
+			else {
+
+				int winSizeInt = int(minDist - 2);
+				if (winSizeInt < 1) winSizeInt = 1;
+				if (winSizeInt > 10) winSizeInt = 10;
+				sizes[i] = cv::Size(winSizeInt, winSizeInt);
+			}
 		}
 	}
 
-	_filteredChCorners.create((int)filteredChCorners.size(), 1, CV_32FC2);
-	for (unsigned int i = 0; i < filteredChCorners.size(); i++) {
-		_filteredChCorners.getMat().at< cv::Point2f >(i) = filteredChCorners[i];
-	}
+	unsigned int _filterCornersWithoutMinMarkers(
+		cv::InputArray _allChCorners,
+		cv::InputArray _allChIds,
+		cv::InputArray _allArucoIds, 
+		int minMarkers,
+		cv::OutputArray _filteredChCorners,
+		cv::OutputArray _filteredChIds) {
 
-	_filteredChIds.create((int)filteredChIds.size(), 1, CV_32SC1);
-	for (unsigned int i = 0; i < filteredChIds.size(); i++) {
-		_filteredChIds.getMat().at< int >(i) = filteredChIds[i];
-	}
+		CV_Assert(minMarkers >= 0 && minMarkers <= 2);
 
-	return (unsigned int)filteredChCorners.size();
-}
+		std::vector< cv::Point2f > filteredChCorners;
+		std::vector< int > filteredChIds;
 
-static unsigned int _selectAndRefineChessboardCorners(
-	cv::InputArray _allCorners,
-	cv::InputArray _image,
-	cv::OutputArray _selectedCorners,
-	cv::OutputArray _selectedIds,
-	const std::vector< cv::Size > &winSizes) {
+		for (unsigned int i = 0; i < _allChIds.getMat().total(); i++) {
+			int currentChId = _allChIds.getMat().at< int >(i);
+			int totalMarkers = 0;
 
-	const int minDistToBorder = 2;
+			for (unsigned int m = 0; m < chBoard->nearestMarkerIdx[currentChId].size(); m++) {
+				int markerId = chBoard->ids[chBoard->nearestMarkerIdx[currentChId][m]];
+				bool found = false;
+				for (unsigned int k = 0; k < _allArucoIds.getMat().total(); k++) {
+					if (_allArucoIds.getMat().at< int >(k) == markerId) {
+						found = true;
+						break;
+					}
+				}
+				if (found) totalMarkers++;
+			}
 
-	std::vector< cv::Point2f > filteredChessboardImgPoints;
-	std::vector< cv::Size > filteredWinSizes;
-	std::vector< int > filteredIds;
-
-	cv::Rect innerRect(minDistToBorder, minDistToBorder, _image.getMat().cols - 2 * minDistToBorder,
-		_image.getMat().rows - 2 * minDistToBorder);
-	for (unsigned int i = 0; i < _allCorners.getMat().total(); i++) {
-		if (innerRect.contains(_allCorners.getMat().at< cv::Point2f >(i))) {
-			filteredChessboardImgPoints.push_back(_allCorners.getMat().at< cv::Point2f >(i));
-			filteredIds.push_back(i);
-			filteredWinSizes.push_back(winSizes[i]);
+			if (totalMarkers >= minMarkers) {
+				filteredChIds.push_back(currentChId);
+				filteredChCorners.push_back(_allChCorners.getMat().at< cv::Point2f >(i));
+			}
 		}
+
+		_filteredChCorners.create((int)filteredChCorners.size(), 1, CV_32FC2);
+		for (unsigned int i = 0; i < filteredChCorners.size(); i++) {
+			_filteredChCorners.getMat().at< cv::Point2f >(i) = filteredChCorners[i];
+		}
+
+		_filteredChIds.create((int)filteredChIds.size(), 1, CV_32SC1);
+		for (unsigned int i = 0; i < filteredChIds.size(); i++) {
+			_filteredChIds.getMat().at< int >(i) = filteredChIds[i];
+		}
+
+		return (unsigned int)filteredChCorners.size();
 	}
 
-	if (filteredChessboardImgPoints.size() == 0) return 0;
+	static unsigned int _selectAndRefineChessboardCorners(
+		cv::InputArray _allCorners,
+		cv::InputArray _image,
+		cv::OutputArray _selectedCorners,
+		cv::OutputArray _selectedIds,
+		const std::vector< cv::Size > &winSizes) {
 
-	cv::Mat grey;
-	if (_image.getMat().type() == CV_8UC3)
-		cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
-	else
-		_image.getMat().copyTo(grey);
+		const int minDistToBorder = 2;
 
-	const cv::Ptr<DetectorParameters> params = DetectorParameters::create();
+		std::vector< cv::Point2f > filteredChessboardImgPoints;
+		std::vector< cv::Size > filteredWinSizes;
+		std::vector< int > filteredIds;
 
-	cv::parallel_for_(
-		cv::Range(0, (int)filteredChessboardImgPoints.size()),
-		ChSubpixelParallel(&grey, &filteredChessboardImgPoints, &filteredWinSizes, params));
+		cv::Rect innerRect(minDistToBorder, minDistToBorder, _image.getMat().cols - 2 * minDistToBorder,
+			_image.getMat().rows - 2 * minDistToBorder);
+		for (unsigned int i = 0; i < _allCorners.getMat().total(); i++) {
+			if (innerRect.contains(_allCorners.getMat().at< cv::Point2f >(i))) {
+				filteredChessboardImgPoints.push_back(_allCorners.getMat().at< cv::Point2f >(i));
+				filteredIds.push_back(i);
+				filteredWinSizes.push_back(winSizes[i]);
+			}
+		}
 
-	_selectedCorners.create((int)filteredChessboardImgPoints.size(), 1, CV_32FC2);
-	for (unsigned int i = 0; i < filteredChessboardImgPoints.size(); i++) {
-		_selectedCorners.getMat().at< cv::Point2f >(i) = filteredChessboardImgPoints[i];
+		if (filteredChessboardImgPoints.size() == 0) return 0;
+
+		cv::Mat grey;
+		if (_image.getMat().type() == CV_8UC3)
+			cvtColor(_image.getMat(), grey, cv::COLOR_BGR2GRAY);
+		else
+			_image.getMat().copyTo(grey);
+
+		const cv::Ptr<DetectorParameters> params = DetectorParameters::create();
+
+		cv::parallel_for_(
+			cv::Range(0, (int)filteredChessboardImgPoints.size()),
+			ChSubpixelParallel(&grey, &filteredChessboardImgPoints, &filteredWinSizes, params));
+
+		_selectedCorners.create((int)filteredChessboardImgPoints.size(), 1, CV_32FC2);
+		for (unsigned int i = 0; i < filteredChessboardImgPoints.size(); i++) {
+			_selectedCorners.getMat().at< cv::Point2f >(i) = filteredChessboardImgPoints[i];
+		}
+
+		_selectedIds.create((int)filteredIds.size(), 1, CV_32SC1);
+		for (unsigned int i = 0; i < filteredIds.size(); i++) {
+			_selectedIds.getMat().at< int >(i) = filteredIds[i];
+		}
+
+		return (unsigned int)filteredChessboardImgPoints.size();
 	}
 
-	_selectedIds.create((int)filteredIds.size(), 1, CV_32SC1);
-	for (unsigned int i = 0; i < filteredIds.size(); i++) {
-		_selectedIds.getMat().at< int >(i) = filteredIds[i];
+	int _interpolateCornersChApproxCalib(
+		cv::InputArrayOfArrays _markerCorners,
+		cv::InputArray _markerIds,
+		cv::InputArray _image,
+		cv::OutputArray _chCorners,
+		cv::OutputArray _chIds) {
+
+		CV_Assert(_image.getMat().channels() == 1 || _image.getMat().channels() == 3);
+		CV_Assert(_markerCorners.total() == _markerIds.getMat().total() &&
+			_markerIds.getMat().total() > 0);
+
+		cv::Mat approximatedRvec, approximatedTvec;
+		int detectedBoardMarkers = estimatePoseBoard(
+			_markerCorners, _markerIds, approximatedRvec, approximatedTvec);
+		if (detectedBoardMarkers == 0) 
+			return 0;
+
+		std::vector< cv::Point2f > allChessboardImgPoints;
+
+		projectPoints(chBoard->chessboardCorners, approximatedRvec, approximatedTvec, cameraMatrix,
+			distCoeffs, allChessboardImgPoints);
+
+		std::vector< cv::Size > subPixWinSizes;
+		_getMaximumSubPixWindowSizes(
+			_markerCorners, _markerIds, allChessboardImgPoints, subPixWinSizes);
+
+		unsigned int nRefinedCorners;
+		nRefinedCorners = _selectAndRefineChessboardCorners(
+			allChessboardImgPoints, _image, _chCorners, _chIds, subPixWinSizes);
+
+		nRefinedCorners = _filterCornersWithoutMinMarkers(
+			_chCorners, _chIds, _markerIds, 2, _chCorners, _chIds);
+
+		return nRefinedCorners;
 	}
 
-	return (unsigned int)filteredChessboardImgPoints.size();
-}
+	int _interpolateCornersChLocalHom(
+		cv::InputArrayOfArrays _markerCorners,
+		cv::InputArray _markerIds,
+		cv::InputArray _image,
+		cv::OutputArray _chCorners,
+		cv::OutputArray _chIds) {
 
-static int _interpolateCornersChApproxCalib(
-	cv::InputArrayOfArrays _markerCorners,
-	cv::InputArray _markerIds,
-	cv::InputArray _image,
-	cv::Ptr<ChBoard> &_board,
-	cv::InputArray _cameraMatrix,
-	cv::InputArray _distCoeffs,
-	cv::OutputArray _chCorners,
-	cv::OutputArray _chIds) {
+		CV_Assert(_image.getMat().channels() == 1 || _image.getMat().channels() == 3);
+		CV_Assert(_markerCorners.total() == _markerIds.getMat().total() &&
+			_markerIds.getMat().total() > 0);
 
-	CV_Assert(_image.getMat().channels() == 1 || _image.getMat().channels() == 3);
-	CV_Assert(_markerCorners.total() == _markerIds.getMat().total() &&
-		_markerIds.getMat().total() > 0);
+		unsigned int nMarkers = (unsigned int)_markerIds.getMat().total();
 
-	cv::Mat approximatedRvec, approximatedTvec;
-	int detectedBoardMarkers;
-	cv::Ptr<Board> _b = _board.staticCast<Board>();
-	detectedBoardMarkers =
-		estimatePoseBoard(_markerCorners, _markerIds, _b,
-		_cameraMatrix, _distCoeffs, approximatedRvec, approximatedTvec);
+		std::vector< cv::Mat > transformations;
+		transformations.resize(nMarkers);
+		for (unsigned int i = 0; i < nMarkers; i++) {
+			std::vector< cv::Point2f > markerObjPoints2D;
+			int markerId = _markerIds.getMat().at< int >(i);
+			std::vector< int >::const_iterator it = find(chBoard->ids.begin(), chBoard->ids.end(), markerId);
+			if (it == chBoard->ids.end()) continue;
+			int boardIdx = (int)std::distance<std::vector<int>::const_iterator>(chBoard->ids.begin(), it);
+			markerObjPoints2D.resize(4);
+			for (unsigned int j = 0; j < 4; j++)
+				markerObjPoints2D[j] =
+				cv::Point2f(chBoard->objPoints[boardIdx][j].x, chBoard->objPoints[boardIdx][j].y);
 
-	if (detectedBoardMarkers == 0) return 0;
+			transformations[i] = getPerspectiveTransform(markerObjPoints2D, _markerCorners.getMat(i));
+		}
 
-	std::vector< cv::Point2f > allChessboardImgPoints;
+		unsigned int nChCorners = (unsigned int)chBoard->chessboardCorners.size();
+		std::vector< cv::Point2f > allChessboardImgPoints(nChCorners, cv::Point2f(-1, -1));
 
-	projectPoints(_board->chessboardCorners, approximatedRvec, approximatedTvec, _cameraMatrix,
-		_distCoeffs, allChessboardImgPoints);
+		for (unsigned int i = 0; i < nChCorners; i++) {
+			cv::Point2f objPoint2D = cv::Point2f(chBoard->chessboardCorners[i].x, chBoard->chessboardCorners[i].y);
 
-	std::vector< cv::Size > subPixWinSizes;
-	_getMaximumSubPixWindowSizes(_markerCorners, _markerIds, allChessboardImgPoints, _board,
-		subPixWinSizes);
-
-	unsigned int nRefinedCorners;
-	nRefinedCorners = _selectAndRefineChessboardCorners(
-		allChessboardImgPoints, _image, _chCorners, _chIds, subPixWinSizes);
-
-	nRefinedCorners = _filterCornersWithoutMinMarkers(_board, _chCorners, _chIds,
-		_markerIds, 2, _chCorners, _chIds);
-
-	return nRefinedCorners;
-}
-
-static int _interpolateCornersChLocalHom(
-	cv::InputArrayOfArrays _markerCorners,
-	cv::InputArray _markerIds,
-	cv::InputArray _image,
-	cv::Ptr<ChBoard> &_board,
-	cv::OutputArray _chCorners,
-	cv::OutputArray _chIds) {
-
-	CV_Assert(_image.getMat().channels() == 1 || _image.getMat().channels() == 3);
-	CV_Assert(_markerCorners.total() == _markerIds.getMat().total() &&
-		_markerIds.getMat().total() > 0);
-
-	unsigned int nMarkers = (unsigned int)_markerIds.getMat().total();
-
-	std::vector< cv::Mat > transformations;
-	transformations.resize(nMarkers);
-	for (unsigned int i = 0; i < nMarkers; i++) {
-		std::vector< cv::Point2f > markerObjPoints2D;
-		int markerId = _markerIds.getMat().at< int >(i);
-		std::vector< int >::const_iterator it = find(_board->ids.begin(), _board->ids.end(), markerId);
-		if (it == _board->ids.end()) continue;
-		int boardIdx = (int)std::distance<std::vector<int>::const_iterator>(_board->ids.begin(), it);
-		markerObjPoints2D.resize(4);
-		for (unsigned int j = 0; j < 4; j++)
-			markerObjPoints2D[j] =
-			cv::Point2f(_board->objPoints[boardIdx][j].x, _board->objPoints[boardIdx][j].y);
-
-		transformations[i] = getPerspectiveTransform(markerObjPoints2D, _markerCorners.getMat(i));
-	}
-
-	unsigned int nChCorners = (unsigned int)_board->chessboardCorners.size();
-	std::vector< cv::Point2f > allChessboardImgPoints(nChCorners, cv::Point2f(-1, -1));
-
-	for (unsigned int i = 0; i < nChCorners; i++) {
-		cv::Point2f objPoint2D = cv::Point2f(_board->chessboardCorners[i].x, _board->chessboardCorners[i].y);
-
-		std::vector< cv::Point2f > interpolatedPositions;
-		for (unsigned int j = 0; j < _board->nearestMarkerIdx[i].size(); j++) {
-			int markerId = _board->ids[_board->nearestMarkerIdx[i][j]];
-			int markerIdx = -1;
-			for (unsigned int k = 0; k < _markerIds.getMat().total(); k++) {
-				if (_markerIds.getMat().at< int >(k) == markerId) {
-					markerIdx = k;
-					break;
+			std::vector< cv::Point2f > interpolatedPositions;
+			for (unsigned int j = 0; j < chBoard->nearestMarkerIdx[i].size(); j++) {
+				int markerId = chBoard->ids[chBoard->nearestMarkerIdx[i][j]];
+				int markerIdx = -1;
+				for (unsigned int k = 0; k < _markerIds.getMat().total(); k++) {
+					if (_markerIds.getMat().at< int >(k) == markerId) {
+						markerIdx = k;
+						break;
+					}
+				}
+				if (markerIdx != -1) {
+					std::vector< cv::Point2f > in, out;
+					in.push_back(objPoint2D);
+					perspectiveTransform(in, out, transformations[markerIdx]);
+					interpolatedPositions.push_back(out[0]);
 				}
 			}
-			if (markerIdx != -1) {
-				std::vector< cv::Point2f > in, out;
-				in.push_back(objPoint2D);
-				perspectiveTransform(in, out, transformations[markerIdx]);
-				interpolatedPositions.push_back(out[0]);
+
+			if (interpolatedPositions.size() == 0) continue;
+
+			if (interpolatedPositions.size() > 1) {
+				allChessboardImgPoints[i] = (interpolatedPositions[0] + interpolatedPositions[1]) / 2.;
+			}
+
+			else allChessboardImgPoints[i] = interpolatedPositions[0];
+		}
+
+		std::vector< cv::Size > subPixWinSizes;
+		_getMaximumSubPixWindowSizes(
+			_markerCorners, _markerIds, allChessboardImgPoints, subPixWinSizes);
+
+		unsigned int nRefinedCorners;
+		nRefinedCorners = _selectAndRefineChessboardCorners(
+			allChessboardImgPoints, _image, _chCorners, _chIds, subPixWinSizes);
+
+		nRefinedCorners = _filterCornersWithoutMinMarkers(
+			_chCorners, _chIds, _markerIds, 2, _chCorners, _chIds);
+
+		return nRefinedCorners;
+	}
+
+	static bool _arePointsEnoughForPoseEstimation(
+		const std::vector< cv::Point3f > &points) {
+
+		if (points.size() < 4) return false;
+
+		std::vector< double > sameXValue;
+		std::vector< int > sameXCounter;
+		for (unsigned int i = 0; i < points.size(); i++) {
+			bool found = false;
+			for (unsigned int j = 0; j < sameXValue.size(); j++) {
+				if (sameXValue[j] == points[i].x) {
+					found = true;
+					sameXCounter[j]++;
+				}
+			}
+			if (!found) {
+				sameXValue.push_back(points[i].x);
+				sameXCounter.push_back(1);
 			}
 		}
 
-		if (interpolatedPositions.size() == 0) continue;
-
-		if (interpolatedPositions.size() > 1) {
-			allChessboardImgPoints[i] = (interpolatedPositions[0] + interpolatedPositions[1]) / 2.;
+		int moreThan2 = 0;
+		for (unsigned int i = 0; i < sameXCounter.size(); i++) {
+			if (sameXCounter[i] >= 2) moreThan2++;
 		}
 
-		else allChessboardImgPoints[i] = interpolatedPositions[0];
+		if (moreThan2 > 1)
+			return true;
+		else
+			return false;
 	}
 
-	std::vector< cv::Size > subPixWinSizes;
-	_getMaximumSubPixWindowSizes(_markerCorners, _markerIds, allChessboardImgPoints, _board,
-		subPixWinSizes);
+private:
+	int squaresX;
+	int squaresY;
+	float squareLength;
+	float markerLength;
 
-	unsigned int nRefinedCorners;
-	nRefinedCorners = _selectAndRefineChessboardCorners(
-		allChessboardImgPoints, _image, _chCorners, _chIds, subPixWinSizes);
+	cv::Ptr<Dictionary> dictionary;
+	cv::Ptr<Board> board;
+	cv::Ptr<ChBoard> chBoard;
+	cv::Ptr<DetectorParameters> params;
 
-	nRefinedCorners = _filterCornersWithoutMinMarkers(_board, _chCorners, _chIds,
-		_markerIds, 2, _chCorners, _chIds);
+	cv::Mat cameraMatrix;
+	cv::Mat distCoeffs;
+};
 
-	return nRefinedCorners;
+
+cv::VideoCapture setupCamera(
+	const int cameraId = 1,
+	const cv::Size frameSize = cv::Size(1280, 720))
+{
+	cv::VideoCapture cap(cameraId);
+	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
+	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frameSize.height);
+	return cap;
 }
 
-int interpolateCornersCh(
-	cv::InputArrayOfArrays _markerCorners,
-	cv::InputArray _markerIds,
-	cv::InputArray _image,
-	cv::Ptr<ChBoard> &_board,
-	cv::OutputArray _chCorners,
-	cv::OutputArray _chIds,
-	cv::InputArray _cameraMatrix,
-	cv::InputArray _distCoeffs) {
-
-	if (_cameraMatrix.total() != 0) {
-		return _interpolateCornersChApproxCalib(_markerCorners, _markerIds, _image, _board,
-			_cameraMatrix, _distCoeffs, _chCorners,
-			_chIds);
-	}
-
-	else {
-		return _interpolateCornersChLocalHom(_markerCorners, _markerIds, _image, _board,
-			_chCorners, _chIds);
-	}
-}
-
-void drawDetectedCornersCh(
-	cv::InputOutputArray _image,
-	cv::InputArray _chCorners,
-	cv::InputArray _chIds,
-	cv::Scalar cornerColor) {
-
-	CV_Assert(_image.getMat().total() != 0 &&
-		(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
-	CV_Assert((_chCorners.getMat().total() == _chIds.getMat().total()) ||
-		_chIds.getMat().total() == 0);
-
-	unsigned int nCorners = (unsigned int)_chCorners.getMat().total();
-	for (unsigned int i = 0; i < nCorners; i++) {
-		cv::Point2f corner = _chCorners.getMat().at< cv::Point2f >(i);
-
-		cv::rectangle(_image, corner - cv::Point2f(3, 3), corner + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
-
-		if (_chIds.total() != 0) {
-			int id = _chIds.getMat().at< int >(i);
-			std::stringstream s;
-			s << "id=" << id;
-			cv::putText(_image, s.str(), corner + cv::Point2f(5, -5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-				cornerColor, 1, cv::LINE_AA);
-		}
-	}
-}
-
-double calibrateCameraCh(
-	cv::InputArrayOfArrays _chCorners,
-	cv::InputArrayOfArrays _chIds,
-	cv::Ptr<ChBoard> &_board,
-	cv::Size imageSize,
-	cv::InputOutputArray _cameraMatrix,
-	cv::InputOutputArray _distCoeffs,
-	cv::OutputArrayOfArrays _rvecs = cv::noArray(),
-	cv::OutputArrayOfArrays _tvecs = cv::noArray(),
-	int flags = 0,
-	cv::TermCriteria criteria = cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, DBL_EPSILON)) {
-
-	CV_Assert(_chIds.total() > 0 && (_chIds.total() == _chCorners.total()));
-
-	std::vector< std::vector< cv::Point3f > > allObjPoints;
-	allObjPoints.resize(_chIds.total());
-	for (unsigned int i = 0; i < _chIds.total(); i++) {
-		unsigned int nCorners = (unsigned int)_chIds.getMat(i).total();
-		CV_Assert(nCorners > 0 && nCorners == _chCorners.getMat(i).total());
-		allObjPoints[i].reserve(nCorners);
-
-		for (unsigned int j = 0; j < nCorners; j++) {
-			int pointId = _chIds.getMat(i).at< int >(j);
-			CV_Assert(pointId >= 0 && pointId < (int)_board->chessboardCorners.size());
-			allObjPoints[i].push_back(_board->chessboardCorners[pointId]);
-		}
-	}
-
-	return calibrateCamera(allObjPoints, _chCorners, imageSize, _cameraMatrix, _distCoeffs,
-		_rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
-}
-
-static bool _arePointsEnoughForPoseEstimation(const std::vector< cv::Point3f > &points) {
-
-	if (points.size() < 4) return false;
-
-	std::vector< double > sameXValue;
-	std::vector< int > sameXCounter;
-	for (unsigned int i = 0; i < points.size(); i++) {
-		bool found = false;
-		for (unsigned int j = 0; j < sameXValue.size(); j++) {
-			if (sameXValue[j] == points[i].x) {
-				found = true;
-				sameXCounter[j]++;
-			}
-		}
-		if (!found) {
-			sameXValue.push_back(points[i].x);
-			sameXCounter.push_back(1);
-		}
-	}
-
-	int moreThan2 = 0;
-	for (unsigned int i = 0; i < sameXCounter.size(); i++) {
-		if (sameXCounter[i] >= 2) moreThan2++;
-	}
-
-	if (moreThan2 > 1)
-		return true;
-	else
-		return false;
-}
-
-bool estimatePoseChBoard(
-	cv::InputArray _chCorners,
-	cv::InputArray _chIds,
-	cv::Ptr<ChBoard> &_board,
-	cv::InputArray _cameraMatrix,
-	cv::InputArray _distCoeffs,
-	cv::OutputArray _rvec,
-	cv::OutputArray _tvec) {
-
-	CV_Assert((_chCorners.getMat().total() == _chIds.getMat().total()));
-
-	if (_chIds.getMat().total() < 4) return false;
-
-	std::vector< cv::Point3f > objPoints;
-	objPoints.reserve(_chIds.getMat().total());
-	for (unsigned int i = 0; i < _chIds.getMat().total(); i++) {
-		int currId = _chIds.getMat().at< int >(i);
-		CV_Assert(currId >= 0 && currId < (int)_board->chessboardCorners.size());
-		objPoints.push_back(_board->chessboardCorners[currId]);
-	}
-
-	if (!_arePointsEnoughForPoseEstimation(objPoints)) return false;
-
-	cv::solvePnP(objPoints, _chCorners, _cameraMatrix, _distCoeffs, _rvec, _tvec);
-
-	return true;
-}
 
 bool calibrate(
 	const std::string filename,
-	const cv::Size frameSize = cv::Size(1280, 720),
-	const int frameMargin = 10,
-	const int boardPad = 10,
-	const int squaresX = 5,
-	const int squaresY = 8,
-	const float squareLength = 0.04f,
-	const float markerLength = 0.02f)
+	const int frameMargin = 10)
 {
-	// ------------------------------------------------------------------------
-	// make board
+	Detector detector;
+	detector.saveBoard("board.png");
 
-	cv::Ptr<Dictionary> dictionary = Dictionary::create();
-	cv::Ptr<ChBoard> chBoard = ChBoard::create(
-		squaresX, squaresY, squareLength, markerLength, dictionary);
-	cv::Ptr<Board> board = chBoard.staticCast<Board>();
-
-	// ------------------------------------------------------------------------
-	// make board image for print
-
-	cv::Mat boardImg;
-	chBoard->draw(cv::Size(2480, 3508), boardImg, boardPad);
-	cv::imwrite("board.png", boardImg);
-
-	// ------------------------------------------------------------------------
-	// setup camera
-
-	cv::VideoCapture cap(1);
-	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
-	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frameSize.height);
+	cv::VideoCapture cap = setupCamera();
 	if (!cap.isOpened())
 		return false;
 
@@ -2093,16 +2170,12 @@ bool calibrate(
 
 		std::vector< int > ids;
 		std::vector< std::vector< cv::Point2f > > corners, rejected;
-		detectMarkers(frame, dictionary, corners, ids,
-			DetectorParameters::create(), rejected);
-		refineDetectedMarkers(frame, board, corners, ids, rejected);
+		detector.detect(frame, corners, ids, rejected);
 
 		cv::Mat vis;
 		frame.copyTo(vis);
-		if (ids.size() > 0) {
-			drawDetectedMarkers(
-				vis, corners, ids, cv::Scalar(0, 255, 255));
-		}
+		if (ids.size() > 0)
+			detector.drawMarkers(vis, corners, ids, cv::Scalar(0, 255, 255));
 		cv::putText(vis,
 			"Press 'ESC' to finish and calibrate",
 			cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.4,
@@ -2122,153 +2195,38 @@ bool calibrate(
 		}
 	}
 
-	// ------------------------------------------------------------------------
-	// camera calibration
-
-	if (allIds.size() < 1) {
-		std::cerr << "Not enough captures for calibration" << std::endl;
+	if (!detector.calibrate(allIds, allCorners, allImgs))
 		return false;
-	}
-	cv::Mat cameraMatrix, distCoeffs;
-	std::vector< cv::Mat > rvecs, tvecs;
-
-	// prepare data for calibration
-	std::vector< std::vector< cv::Point2f > > allCornersConcatenated;
-	std::vector< int > allIdsConcatenated;
-	std::vector< int > markerCounterPerFrame;
-	markerCounterPerFrame.reserve(allCorners.size());
-	for (unsigned int i = 0; i < allCorners.size(); i++) {
-		markerCounterPerFrame.push_back((int)allCorners[i].size());
-		for (unsigned int j = 0; j < allCorners[i].size(); j++) {
-			allCornersConcatenated.push_back(allCorners[i][j]);
-			allIdsConcatenated.push_back(allIds[i][j]);
-		}
-	}
-
-	double arucoRepErr = calibrateCameraAruco(
-		allCornersConcatenated, allIdsConcatenated,
-		markerCounterPerFrame, board, frameSize,
-		cameraMatrix, distCoeffs);
-
-	int nFrames = (int)allCorners.size();
-	std::vector< cv::Mat > allChCorners;
-	std::vector< cv::Mat > allChIds;
-	allChCorners.reserve(nFrames);
-	allChIds.reserve(nFrames);
-
-	for (int i = 0; i < nFrames; i++) {
-		// interpolate using camera parameters
-		cv::Mat currentChCorners, currentChIds;
-		interpolateCornersCh(
-			allCorners[i], allIds[i], allImgs[i], chBoard,
-			currentChCorners, currentChIds,
-			cameraMatrix, distCoeffs);
-
-		const int num = currentChCorners.size().height;
-		if (num > 4) {
-			allChCorners.push_back(currentChCorners);
-			allChIds.push_back(currentChIds);
-		}
-	}
-
-	if (allChCorners.size() < 4) {
-		std::cerr << "Not enough corners for calibration" << std::endl;
-		return false;
-	}
-
-	double repError = calibrateCameraCh(
-		allChCorners, allChIds, chBoard, frameSize,
-		cameraMatrix, distCoeffs, rvecs, tvecs, 0);
-
-	// ------------------------------------------------------------------------
-	// save camera parameters
-
-	cv::FileStorage fs(filename, cv::FileStorage::WRITE);
-	if (!fs.isOpened()) {
-		std::cerr << "Cannot save output file" << std::endl;
-		return false;
-	}
-	fs << "imageWidth" << frameSize.width;
-	fs << "imageHeight" << frameSize.height;
-	fs << "cameraMatrix" << cameraMatrix;
-	fs << "distCoeffs" << distCoeffs;
-	fs << "avgReprojError" << repError;
-	fs.release();
+	detector.saveCalibration(filename);
 	return true;
 }
 
 bool estimate(
-	const cv::Mat & cameraMatrix, 
-	const cv::Mat & distCoeffs,
-	const cv::Size frameSize = cv::Size(1280, 720),
-	const int boardPad = 10,
-	const int squaresX = 5,
-	const int squaresY = 8,
-	const float squareLength = 0.04f,
-	const float markerLength = 0.02f)
+	const std::string filename)
 {
-	float axisLength = 0.5f * (std::min(squaresX, squaresY) * (squareLength));
+	Detector detector;
+	detector.readCalibration(filename);
 
-	// ------------------------------------------------------------------------
-	// make board
-
-	cv::Ptr<Dictionary> dictionary = Dictionary::create();
-	cv::Ptr<ChBoard> chBoard = ChBoard::create(
-		squaresX, squaresY, squareLength, markerLength, dictionary);
-	cv::Ptr<Board> board = chBoard.staticCast<Board>();
-
-	// ------------------------------------------------------------------------
-	// setup camera
-
-	cv::VideoCapture cap(1);
-	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
-	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frameSize.height);
+	cv::VideoCapture cap = setupCamera();
 	if (!cap.isOpened())
 		return false;
-
-	// ------------------------------------------------------------------------
-	// main loop
-
+	
 	cv::Mat frame;
-
 	for (int i = 0;; ++i) {
-		 cap >> frame;
-
-		std::vector< int > ids, chIds;
-		std::vector< std::vector< cv::Point2f > > corners, rejected;
-		std::vector< cv::Point2f > chCorners;
-		detectMarkers(frame, dictionary, corners, ids,
-			DetectorParameters::create(), rejected);
-		refineDetectedMarkers(frame, board, corners, ids, rejected);
-
-		int numCorners = 0;
-		if (ids.size() > 0)
-			numCorners = interpolateCornersCh(
-			corners, ids, frame, chBoard, chCorners,
-			chIds, cameraMatrix, distCoeffs);
+		cap >> frame;
 
 		cv::Vec3d rvec, tvec;
-		bool validPose = false;
-		if (cameraMatrix.total() != 0) {
-			validPose = estimatePoseChBoard(
-				chCorners, chIds, chBoard,
-				cameraMatrix, distCoeffs, rvec, tvec);
-		}
+		bool validPose = detector.getPose(frame, rvec, tvec);
 
 		cv::Mat vis;
 		frame.copyTo(vis);
-		if (numCorners > 0)
-			drawDetectedCornersCh(
-				vis, chCorners, chIds, cv::Scalar(0, 255, 255));
 		if (validPose)
-			drawAxis(
-			vis, cameraMatrix, distCoeffs, rvec, tvec, axisLength);
-		cv::imshow("vis", vis);
+			detector.drawAxis(vis, rvec, tvec);
 
+		cv::imshow("vis", vis);
 		const char key = cv::waitKey(30);
-		if (key == 27) {
+		if (key == 27)
 			break;
-		}
 	}
 
 	return true;
@@ -2283,22 +2241,7 @@ int main()
 			return -1;
 		}
 	}
-
-	cv::FileStorage fs(filename, cv::FileStorage::READ);
-	if (!fs.isOpened()) {
-		std::cerr << "Cannot open calibration file" << std::endl;
-		return -1;
-	}
-	cv::Size frameSize;
-	cv::Mat cameraMatrix, distCoeffs;
-	fs["cameraMatrix"] >> cameraMatrix;
-	fs["distCoeffs"] >> distCoeffs;
-	fs.release();
-
-	std::cout << "cameraMatrix: " << cameraMatrix << std::endl;
-	std::cout << "distCoeffs: " << distCoeffs << std::endl;
-
-	estimate(cameraMatrix, distCoeffs);
+	estimate(filename);
 
 	return 0;
 }
