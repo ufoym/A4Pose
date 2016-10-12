@@ -758,9 +758,9 @@ public:
 		std::vector< cv::Point2f > imagePoints;
 		cv::projectPoints(axisPoints, _rvec, _tvec, cameraMatrix, distCoeffs, imagePoints);
 
-		cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3);
-		cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3);
-		cv::line(_image, imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3);
+		cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3, cv::LINE_AA);
+		cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
+		cv::line(_image, imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3, cv::LINE_AA);
 	}
 
 
