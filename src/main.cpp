@@ -744,8 +744,6 @@ public:
 		cv::InputArray _tvec) {
 		float length = 0.5f * (std::min(squaresX, squaresY) * (squareLength));
 
-		float axisLength = 0.5f * (std::min(squaresX, squaresY) * (squareLength));
-
 		CV_Assert(_image.getMat().total() != 0 &&
 			(_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
 		CV_Assert(length > 0);
