@@ -1,5 +1,49 @@
+#include "opencv2/core/version.hpp"
 #include "opencv2/opencv.hpp"
+#if CV_MAJOR_VERSION == 3
 #include "opencv2/core/hal/hal.hpp"
+#define normHamming cv::hal::normHamming
+#else
+#define normHamming cv::normHamming
+#endif
+
+
+
+template<typename _Tp> inline
+void copy(const cv::InputArray& in, std::vector<_Tp>& out) {
+#if CV_MAJOR_VERSION == 3
+	in.copyTo(out);
+#else
+	if (in.kind() == cv::_InputArray::STD_VECTOR ) {
+		cv::Mat m = in.getMat();
+		m.copyTo(out);
+	}
+	else {
+		CV_Error(-213, "");
+	}
+#endif
+}
+
+void set(cv::OutputArray& out, const cv::InputArray& in)
+{
+#if CV_MAJOR_VERSION == 3
+	out.setTo(in);
+#else
+	int k = out.kind();
+	if (k == cv::_InputArray::NONE) {
+
+	}
+	else if (k == cv::_InputArray::MAT 
+		|| k == cv::_InputArray::MATX 
+		|| k == cv::_InputArray::STD_VECTOR) {
+		cv::Mat m = out.getMat();
+		m.setTo(in);
+	}
+	else {
+		CV_Error(-213, "");
+	}
+#endif
+}
 
 class Dictionary {
 
@@ -58,7 +102,7 @@ public:
 			int currentMinDistance = markerSize * markerSize + 1;
 			int currentRotation = -1;
 			for (unsigned int r = 0; r < 4; r++) {
-				int currentHamming = cv::hal::normHamming(
+				int currentHamming = normHamming(
 					bytesList.ptr(m) + r*candidateBytes.cols,
 					candidateBytes.ptr(),
 					candidateBytes.cols);
@@ -89,7 +133,7 @@ public:
 		cv::Mat candidateBytes = getByteListFromBits(bits.getMat());
 		int currentMinDistance = int(bits.total() * bits.total());
 		for (unsigned int r = 0; r < nRotations; r++) {
-			int currentHamming = cv::hal::normHamming(
+			int currentHamming = normHamming(
 				bytesList.ptr(id) + r*candidateBytes.cols,
 				candidateBytes.ptr(),
 				candidateBytes.cols);
@@ -197,7 +241,7 @@ public:
 		}
 
 		cv::Ptr<Board> res = cv::makePtr<Board>();
-		ids.copyTo(res->ids);
+		copy(ids, res->ids);
 		res->objPoints = obj_points_vector;
 		res->dictionary = dictionary;
 		return res;
@@ -263,7 +307,7 @@ public:
 		CV_Assert(marginSize >= 0);
 
 		_img.create(outSize, CV_8UC1);
-		_img.setTo(255);
+		set(_img, 255);
 		cv::Mat out = _img.getMat();
 		cv::Mat noMarginsImg =
 			out.colRange(marginSize, out.cols - marginSize).rowRange(marginSize, out.rows - marginSize);
@@ -335,7 +379,7 @@ private:
 				cv::Point3f center = cv::Point3f(0, 0, 0);
 				for (unsigned int k = 0; k < 4; k++)
 					center += objPoints[j][k];
-				center /= 4.;
+				center *= 0.25;
 				double sqDistance;
 				cv::Point3f distVector = chCorner - center;
 				sqDistance = distVector.x * distVector.x + distVector.y * distVector.y;
@@ -518,7 +562,11 @@ public:
 		markerLength = _markerLength;
 		dictionary = Dictionary::create();
 		chBoard = ChBoard::create(squaresX, squaresY, squareLength, markerLength, dictionary);
+#if CV_MAJOR_VERSION == 3
 		board = chBoard.staticCast<Board>();
+#else
+		board = chBoard;
+#endif
 		params = DetectorParameters::create();
 	}
 	~Detector() {}
@@ -693,20 +741,35 @@ public:
 				cv::Point2f p0, p1;
 				p0 = currentMarker.ptr< cv::Point2f >(0)[j];
 				p1 = currentMarker.ptr< cv::Point2f >(0)[(j + 1) % 4];
-				cv::line(_image, p0, p1, borderColor, 1);
+#if CV_MAJOR_VERSION == 3
+				cv::line(_image, p0, p1, borderColor, 1, cv::LINE_AA);
+#else
+				cv::line(_image.getMatRef(), p0, p1, borderColor, 1, CV_AA);
+#endif
 			}
 
+#if CV_MAJOR_VERSION == 3
 			cv::rectangle(_image, currentMarker.ptr< cv::Point2f >(0)[0] - cv::Point2f(3, 3),
 				currentMarker.ptr< cv::Point2f >(0)[0] + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
+#else
+			cv::rectangle(_image.getMatRef(), currentMarker.ptr< cv::Point2f >(0)[0] - cv::Point2f(3, 3),
+				currentMarker.ptr< cv::Point2f >(0)[0] + cv::Point2f(3, 3), cornerColor, 1, CV_AA);
+#endif
 
 			if (_ids.total() != 0) {
 				cv::Point2f cent(0, 0);
 				for (int p = 0; p < 4; p++)
 					cent += currentMarker.ptr< cv::Point2f >(0)[p];
-				cent = cent / 4.;
+				cent = cent * 0.25;
 				std::stringstream s;
 				s << "id=" << _ids.getMat().ptr< int >(0)[i];
-				cv::putText(_image, s.str(), cent, cv::FONT_HERSHEY_SIMPLEX, 0.5, textColor, 1, cv::LINE_AA);
+#if CV_MAJOR_VERSION == 3
+				cv::putText(_image, s.str(), cent, cv::FONT_HERSHEY_SIMPLEX, 
+					0.5, textColor, 1, cv::LINE_AA);
+#else
+				cv::putText(_image.getMatRef(), s.str(), cent, cv::FONT_HERSHEY_SIMPLEX,
+					0.5, textColor, 1, CV_AA);
+#endif
 			}
 		}
 	}
@@ -725,15 +788,24 @@ public:
 		unsigned int nCorners = (unsigned int)_chCorners.getMat().total();
 		for (unsigned int i = 0; i < nCorners; i++) {
 			cv::Point2f corner = _chCorners.getMat().at< cv::Point2f >(i);
-
-			cv::rectangle(_image, corner - cv::Point2f(3, 3), corner + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
-
+#if CV_MAJOR_VERSION == 3
+			cv::rectangle(_image, corner - cv::Point2f(3, 3), 
+				corner + cv::Point2f(3, 3), cornerColor, 1, cv::LINE_AA);
+#else
+			cv::rectangle(_image.getMatRef(), corner - cv::Point2f(3, 3),
+				corner + cv::Point2f(3, 3), cornerColor, 1, CV_AA);
+#endif
 			if (_chIds.total() != 0) {
 				int id = _chIds.getMat().at< int >(i);
 				std::stringstream s;
 				s << "id=" << id;
-				cv::putText(_image, s.str(), corner + cv::Point2f(5, -5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-					cornerColor, 1, cv::LINE_AA);
+#if CV_MAJOR_VERSION == 3
+				cv::putText(_image, s.str(), corner + cv::Point2f(5, -5), 
+					cv::FONT_HERSHEY_SIMPLEX, 0.5, cornerColor, 1, cv::LINE_AA);
+#else
+				cv::putText(_image.getMatRef(), s.str(), corner + cv::Point2f(5, -5), 
+					cv::FONT_HERSHEY_SIMPLEX, 0.5, cornerColor, 1, CV_AA);
+#endif
 			}
 		}
 	}
@@ -756,9 +828,16 @@ public:
 		std::vector< cv::Point2f > imagePoints;
 		cv::projectPoints(axisPoints, _rvec, _tvec, cameraMatrix, distCoeffs, imagePoints);
 
+
+#if CV_MAJOR_VERSION == 3
 		cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3, cv::LINE_AA);
 		cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
 		cv::line(_image, imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3, cv::LINE_AA);
+#else
+		cv::line(_image.getMatRef(), imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3, CV_AA);
+		cv::line(_image.getMatRef(), imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3, CV_AA);
+		cv::line(_image.getMatRef(), imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3, CV_AA);
+#endif
 	}
 
 
@@ -806,7 +885,7 @@ protected:
 
 		if (_detectedIds.total() == 0 || _rejectedCorners.total() == 0) return;
 
-		DetectorParameters &params = *_params;
+		const DetectorParameters &params = *_params;
 
 		std::vector< std::vector< cv::Point2f > > undetectedMarkersCorners;
 		std::vector< int > undetectedMarkersIds;
@@ -1057,8 +1136,13 @@ protected:
 			}
 		}
 
+#if CV_MAJOR_VERSION == 3
 		return calibrateCamera(allObjPoints, _chCorners, imageSize, cameraMatrix, distCoeffs,
 			_rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
+#else
+		return calibrateCamera(allObjPoints, _chCorners, imageSize, cameraMatrix, distCoeffs,
+			_rvecs, _tvecs, flags, criteria);
+#endif
 	}
 
 	double calibrateCameraAr(
@@ -1096,9 +1180,13 @@ protected:
 				processedObjectPoints.push_back(currentObjPoints);
 			}
 		}
-
+#if CV_MAJOR_VERSION == 3
 		return cv::calibrateCamera(processedObjectPoints, processedImagePoints, imageSize, cameraMatrix,
 			distCoeffs, _rvecs, _tvecs, cv::noArray(), cv::noArray(), cv::noArray(), flags, criteria);
+#else
+		return cv::calibrateCamera(processedObjectPoints, processedImagePoints, imageSize, cameraMatrix,
+			distCoeffs, _rvecs, _tvecs, flags, criteria);
+#endif
 	}
 
 private:
@@ -1587,17 +1675,10 @@ private:
 		out.release();
 		out.create((int)vec.size(), 1, CV_32FC2);
 
-		if (out.isMatVector()) {
+		if (out.kind() == cv::_InputArray::STD_VECTOR_MAT) {
 			for (unsigned int i = 0; i < vec.size(); i++) {
 				out.create(4, 1, CV_32FC2, i, true);
 				cv::Mat &m = out.getMatRef(i);
-				vec[i].copyTo(m);
-			}
-		}
-		else if (out.isUMatVector()) {
-			for (unsigned int i = 0; i < vec.size(); i++) {
-				out.create(4, 1, CV_32FC2, i, true);
-				cv::UMat &m = out.getUMatRef(i);
 				vec[i].copyTo(m);
 			}
 		}
@@ -1609,8 +1690,8 @@ private:
 			}
 		}
 		else {
-			CV_Error(cv::Error::StsNotImplemented,
-				"Only Mat vector, UMat vector, and vector<vector> OutputArrays are currently supported.");
+			CV_Error(-213,
+				"Only Mat vector, and vector<vector> OutputArrays are currently supported.");
 		}
 	}
 
@@ -2065,7 +2146,7 @@ private:
 			if (interpolatedPositions.size() == 0) continue;
 
 			if (interpolatedPositions.size() > 1) {
-				allChessboardImgPoints[i] = (interpolatedPositions[0] + interpolatedPositions[1]) / 2.;
+				allChessboardImgPoints[i] = (interpolatedPositions[0] + interpolatedPositions[1]) * 0.5;
 			}
 
 			else allChessboardImgPoints[i] = interpolatedPositions[0];
@@ -2174,10 +2255,17 @@ bool calibrate(
 		frame.copyTo(vis);
 		if (ids.size() > 0)
 			detector.drawMarkers(vis, corners, ids, cv::Scalar(0, 255, 255));
-		cv::putText(vis,
-			"Press 'ESC' to finish and calibrate",
+#if CV_MAJOR_VERSION == 3
+		cv::putText(
+			vis, "Press 'ESC' to finish and calibrate",
 			cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.4,
 			cv::Scalar(255, 255, 0), 1, cv::LINE_AA);
+#else
+		cv::putText(
+			vis, "Press 'ESC' to finish and calibrate",
+			cv::Point(10, 20), cv::FONT_HERSHEY_SIMPLEX, 0.4,
+			cv::Scalar(255, 255, 0), 1, CV_AA);			
+#endif			
 		cv::imshow("vis", vis);
 
 		const char key = cv::waitKey(30);
@@ -2232,12 +2320,11 @@ bool estimate(
 
 int main()
 {
+	bool needCalibrate = true;
 	std::string filename = "camera.yml";
-	if (!std::ifstream(filename.c_str()).good()) {
-		if (!calibrate(filename)) {
-			std::cerr << "Cannot calibrate the camera" << std::endl;
-			return -1;
-		}
+	if (needCalibrate && !calibrate(filename)) {
+		std::cerr << "Cannot calibrate the camera" << std::endl;
+		return -1;
 	}
 	estimate(filename);
 
