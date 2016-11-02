@@ -2215,8 +2215,8 @@ private:
 
 
 cv::VideoCapture setupCamera(
-	const int cameraId = 1,
-	const cv::Size frameSize = cv::Size(1280, 720))
+	const int cameraId,
+	const cv::Size frameSize)
 {
 	cv::VideoCapture cap(cameraId);
 	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
@@ -2225,16 +2225,24 @@ cv::VideoCapture setupCamera(
 }
 
 
+void listCamera(const int max_id = 255)
+{
+	for (int i = 0; i < max_id; ++i) {
+		cv::VideoCapture cap(i);
+		if (cap.isOpened())
+			std::cout << "ID: " << i << std::endl;
+		cap.release();
+	}
+}
+
+
 bool calibrate(
+	cv::VideoCapture & cap,
 	const std::string filename,
 	const int frameMargin = 10)
 {
 	Detector detector;
 	detector.saveBoard("board.png");
-
-	cv::VideoCapture cap = setupCamera();
-	if (!cap.isOpened())
-		return false;
 
 	// ------------------------------------------------------------------------
 	// main loop
@@ -2288,14 +2296,11 @@ bool calibrate(
 }
 
 bool estimate(
+	cv::VideoCapture & cap,
 	const std::string filename)
 {
 	Detector detector;
 	detector.readCalibration(filename);
-
-	cv::VideoCapture cap = setupCamera();
-	if (!cap.isOpened())
-		return false;
 	
 	cv::Mat frame;
 	for (int i = 0;; ++i) {
@@ -2318,15 +2323,31 @@ bool estimate(
 	return true;
 }
 
-int main()
-{
-	bool needCalibrate = true;
-	std::string filename = "camera.yml";
-	if (needCalibrate && !calibrate(filename)) {
+int main(int argc, char* argv[]) {
+	const std::string filename = "camera.yml";
+
+	int cameraId = 3;
+	cv::Size cameraSize = cv::Size(1920, 1080);
+	if (argc > 1)
+		cameraId = atoi(argv[1]);
+	if (argc > 3)
+		cameraSize = cv::Size(atoi(argv[2]), atoi(argv[3]));
+
+	bool needCalibrate = false;
+	if (!std::ifstream(filename.c_str()))
+		needCalibrate = true;
+
+	cv::VideoCapture cap = setupCamera(cameraId, cameraSize);
+	if (!cap.isOpened()) {
+		std::cerr << "Cannot open the camera" << std::endl;
+		return -1;
+	}
+
+	if (needCalibrate && !calibrate(cap, filename)) {
 		std::cerr << "Cannot calibrate the camera" << std::endl;
 		return -1;
 	}
-	estimate(filename);
+	estimate(cap, filename);
 
 	return 0;
 }
