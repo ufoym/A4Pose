@@ -2239,10 +2239,12 @@ void listCamera(const int max_id = 255)
 bool calibrate(
 	cv::VideoCapture & cap,
 	const std::string filename,
+	const std::string board_filename = "board.png",
 	const int frameMargin = 10)
 {
 	Detector detector;
-	detector.saveBoard("board.png");
+	if (!std::ifstream(board_filename.c_str()))
+		detector.saveBoard(board_filename);
 
 	// ------------------------------------------------------------------------
 	// main loop
@@ -2327,7 +2329,7 @@ int main(int argc, char* argv[]) {
 	const std::string filename = "camera.yml";
 
 	int cameraId = 3;
-	cv::Size cameraSize = cv::Size(1920, 1080);
+	cv::Size cameraSize = cv::Size(1280, 720);
 	if (argc > 1)
 		cameraId = atoi(argv[1]);
 	if (argc > 3)
