@@ -677,6 +677,27 @@ public:
 		return validPose;
 	}
 
+	cv::Vec3d getAngles(const cv::Vec3d & rvec)	{
+		cv::Mat rmat;
+		cv::Rodrigues(rvec, rmat);
+		cv::Mat x_ref = (cv::Mat_<double>(3, 1) << 1, 0, 0);
+		cv::Mat z_ref = (cv::Mat_<double>(3, 1) << 0, 0, 1);
+		cv::Mat x_v = rmat * x_ref;
+		cv::Mat z_v = rmat * z_ref;
+
+		double roll = atan2(x_v.at<double>(0), x_v.at<double>(1)) * 180 / CV_PI;
+		roll -= roll > 0 ? 180 : -180;
+
+		double pitch = atan2(z_v.at<double>(1), z_v.at<double>(2)) * 180 / CV_PI;
+		pitch -= pitch > 0 ? 180 : -180;
+
+		double yaw = atan2(z_v.at<double>(2), z_v.at<double>(0)) * 180 / CV_PI;
+		yaw += (yaw > 90 && yaw < 180) ? -270 : 90;
+
+		cv::Vec3d roll_pitch_yaw(roll, pitch, yaw);
+		return roll_pitch_yaw;
+	}
+
 	bool saveBoard(
 		const std::string filename,
 		const cv::Size image_size = cv::Size(2480, 3508),
@@ -833,10 +854,16 @@ public:
 		cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3, cv::LINE_AA);
 		cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
 		cv::line(_image, imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3, cv::LINE_AA);
+		cv::putText(_image, "x", imagePoints[1], cv::FONT_HERSHEY_PLAIN, 1.5, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
+		cv::putText(_image, "y", imagePoints[2], cv::FONT_HERSHEY_PLAIN, 1.5, cv::Scalar(0, 255, 0), 2, cv::LINE_AA);
+		cv::putText(_image, "z", imagePoints[3], cv::FONT_HERSHEY_PLAIN, 1.5, cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
 #else
 		cv::line(_image.getMatRef(), imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3, CV_AA);
 		cv::line(_image.getMatRef(), imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3, CV_AA);
 		cv::line(_image.getMatRef(), imagePoints[0], imagePoints[3], cv::Scalar(255, 0, 0), 3, CV_AA);
+		cv::putText(_image.getMatRef(), "x", imagePoints[1], cv::FONT_HERSHEY_PLAIN, 1.5, cv::Scalar(0, 0, 255), 2, CV_AA);
+		cv::putText(_image.getMatRef(), "y", imagePoints[2], cv::FONT_HERSHEY_PLAIN, 1.5, cv::Scalar(0, 255, 0), 2, CV_AA);
+		cv::putText(_image.getMatRef(), "z", imagePoints[3], cv::FONT_HERSHEY_PLAIN, 1.5, cv::Scalar(255, 0, 0), 2, CV_AA);
 #endif
 	}
 
@@ -2216,8 +2243,7 @@ private:
 
 cv::VideoCapture setupCamera(
 	const int cameraId,
-	const cv::Size frameSize)
-{
+	const cv::Size frameSize) {
 	cv::VideoCapture cap(cameraId);
 	cap.set(CV_CAP_PROP_FRAME_WIDTH, frameSize.width);
 	cap.set(CV_CAP_PROP_FRAME_HEIGHT, frameSize.height);
@@ -2225,8 +2251,8 @@ cv::VideoCapture setupCamera(
 }
 
 
-void listCamera(const int max_id = 255)
-{
+void listCamera(const int max_id = 255) {
+
 	for (int i = 0; i < max_id; ++i) {
 		cv::VideoCapture cap(i);
 		if (cap.isOpened())
@@ -2240,8 +2266,8 @@ bool calibrate(
 	cv::VideoCapture & cap,
 	const std::string filename,
 	const std::string board_filename = "board.png",
-	const int frameMargin = 10)
-{
+	const int frameMargin = 10) {
+
 	Detector detector;
 	if (!std::ifstream(board_filename.c_str()))
 		detector.saveBoard(board_filename);
@@ -2297,10 +2323,11 @@ bool calibrate(
 	return true;
 }
 
+
 bool estimate(
 	cv::VideoCapture & cap,
-	const std::string filename)
-{
+	const std::string filename) {
+
 	Detector detector;
 	detector.readCalibration(filename);
 	
@@ -2313,8 +2340,23 @@ bool estimate(
 
 		cv::Mat vis;
 		frame.copyTo(vis);
-		if (validPose)
+		if (validPose) {
 			detector.drawAxis(vis, rvec, tvec);
+			cv::Vec3d roll_pitch_yaw = detector.getAngles(rvec);
+			double roll = roll_pitch_yaw[0];
+			double pitch = roll_pitch_yaw[1];
+			double yaw = roll_pitch_yaw[2];
+
+			cv::putText(vis, "Roll :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 0), 1, cv::LINE_AA);
+			cv::putText(vis, "Pitch:", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+			cv::putText(vis, "Yaw  :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+			cv::rectangle(vis, cv::Rect(100, 10, 300, 10), cv::Scalar(255, 0, 0), -1);
+			cv::rectangle(vis, cv::Rect(100, 30, 300, 10), cv::Scalar(0, 255, 0), -1);
+			cv::rectangle(vis, cv::Rect(100, 50, 300, 10), cv::Scalar(0, 0, 255), -1);
+			cv::rectangle(vis, cv::Rect(250 + int(roll), 5, 10, 15), cv::Scalar(255, 0, 0), -1);
+			cv::rectangle(vis, cv::Rect(250 + int(pitch), 25, 10, 15), cv::Scalar(0, 255, 0), -1);
+			cv::rectangle(vis, cv::Rect(250 + int(yaw), 45, 10, 15), cv::Scalar(0, 0, 255), -1);
+		}
 
 		cv::imshow("vis", vis);
 		const char key = cv::waitKey(30);
@@ -2326,6 +2368,7 @@ bool estimate(
 }
 
 int main(int argc, char* argv[]) {
+
 	const std::string filename = "camera.yml";
 
 	int cameraId = 3;
