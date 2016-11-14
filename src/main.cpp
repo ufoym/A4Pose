@@ -554,8 +554,8 @@ public:
 	Detector(
 		const int _squaresX = 5,
 		const int _squaresY = 8,
-		const float _squareLength = 0.04f,
-		const float _markerLength = 0.02f) {
+		const float _squareLength = 0.034f,
+		const float _markerLength = 0.017f) {
 		squaresX = _squaresX;
 		squaresY = _squaresY;
 		squareLength = _squareLength;
@@ -849,7 +849,6 @@ public:
 		std::vector< cv::Point2f > imagePoints;
 		cv::projectPoints(axisPoints, _rvec, _tvec, cameraMatrix, distCoeffs, imagePoints);
 
-
 #if CV_MAJOR_VERSION == 3
 		cv::line(_image, imagePoints[0], imagePoints[1], cv::Scalar(0, 0, 255), 3, cv::LINE_AA);
 		cv::line(_image, imagePoints[0], imagePoints[2], cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
@@ -867,6 +866,33 @@ public:
 #endif
 	}
 
+
+	void drawRollPitchYaw(
+		cv::InputOutputArray _image, 
+		cv::InputArray rollPitchYaw) {
+		
+		cv::Mat matRPY = rollPitchYaw.getMat();
+		double *rpy = (double *)matRPY.data;
+		double roll = rpy[0];
+		double pitch = rpy[1];
+		double yaw = rpy[2];
+
+#if CV_MAJOR_VERSION == 3
+		cv::putText(_image, "Roll :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 0), 1, cv::LINE_AA);
+		cv::putText(_image, "Pitch:", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+		cv::putText(_image, "Yaw  :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+#else
+		cv::putText(_image.getMatRef(), "Roll :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 0), 1, CV_AA);
+		cv::putText(_image.getMatRef(), "Pitch:", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 0), 1, CV_AA);
+		cv::putText(_image.getMatRef(), "Yaw  :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 0, 255), 1, CV_AA);
+#endif
+		cv::rectangle(_image.getMatRef(), cv::Rect(100, 10, 300, 10), cv::Scalar(255, 0, 0), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(100, 30, 300, 10), cv::Scalar(0, 255, 0), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(100, 50, 300, 10), cv::Scalar(0, 0, 255), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(250 + int(roll), 5, 10, 15), cv::Scalar(255, 0, 0), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(250 + int(pitch), 25, 10, 15), cv::Scalar(0, 255, 0), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(250 + int(yaw), 45, 10, 15), cv::Scalar(0, 0, 255), -1);
+	}
 
 protected:
 
@@ -2342,20 +2368,8 @@ bool estimate(
 		frame.copyTo(vis);
 		if (validPose) {
 			detector.drawAxis(vis, rvec, tvec);
-			cv::Vec3d roll_pitch_yaw = detector.getAngles(rvec);
-			double roll = roll_pitch_yaw[0];
-			double pitch = roll_pitch_yaw[1];
-			double yaw = roll_pitch_yaw[2];
-
-			cv::putText(vis, "Roll :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 0), 1, cv::LINE_AA);
-			cv::putText(vis, "Pitch:", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
-			cv::putText(vis, "Yaw  :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
-			cv::rectangle(vis, cv::Rect(100, 10, 300, 10), cv::Scalar(255, 0, 0), -1);
-			cv::rectangle(vis, cv::Rect(100, 30, 300, 10), cv::Scalar(0, 255, 0), -1);
-			cv::rectangle(vis, cv::Rect(100, 50, 300, 10), cv::Scalar(0, 0, 255), -1);
-			cv::rectangle(vis, cv::Rect(250 + int(roll), 5, 10, 15), cv::Scalar(255, 0, 0), -1);
-			cv::rectangle(vis, cv::Rect(250 + int(pitch), 25, 10, 15), cv::Scalar(0, 255, 0), -1);
-			cv::rectangle(vis, cv::Rect(250 + int(yaw), 45, 10, 15), cv::Scalar(0, 0, 255), -1);
+			cv::Vec3d rpy = detector.getAngles(rvec);
+			detector.drawRollPitchYaw(vis, rpy);
 		}
 
 		cv::imshow("vis", vis);
