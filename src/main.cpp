@@ -677,13 +677,13 @@ public:
 		return validPose;
 	}
 
-	cv::Vec3d getAngles(const cv::Vec3d & rvec)	{
+	cv::Vec6d explain(const cv::Vec3d & rvec, const cv::Vec3d & tvec)	{
 		cv::Mat rmat;
 		cv::Rodrigues(rvec, rmat);
-		cv::Mat x_ref = (cv::Mat_<double>(3, 1) << 1, 0, 0);
-		cv::Mat z_ref = (cv::Mat_<double>(3, 1) << 0, 0, 1);
-		cv::Mat x_v = rmat * x_ref;
-		cv::Mat z_v = rmat * z_ref;
+		cv::Mat xRef = (cv::Mat_<double>(3, 1) << 1, 0, 0);
+		cv::Mat zRef = (cv::Mat_<double>(3, 1) << 0, 0, 1);
+		cv::Mat x_v = rmat * xRef;
+		cv::Mat z_v = rmat * zRef;
 
 		double roll = atan2(x_v.at<double>(0), x_v.at<double>(1)) * 180 / CV_PI;
 		roll -= roll > 0 ? 180 : -180;
@@ -694,8 +694,13 @@ public:
 		double yaw = atan2(z_v.at<double>(2), z_v.at<double>(0)) * 180 / CV_PI;
 		yaw += (yaw > 90 && yaw < 180) ? -270 : 90;
 
-		cv::Vec3d roll_pitch_yaw(roll, pitch, yaw);
-		return roll_pitch_yaw;
+		// unit: mm
+		double x = tvec[1] * 1000;
+		double y = tvec[0] * 1000;
+		double z = tvec[2] * 1000;
+
+		cv::Vec6d rpyxyz(roll, pitch, yaw, x, y, z);
+		return rpyxyz;
 	}
 
 	bool saveBoard(
@@ -867,24 +872,41 @@ public:
 	}
 
 
-	void drawRollPitchYaw(
-		cv::InputOutputArray _image, 
-		cv::InputArray rollPitchYaw) {
-		
-		cv::Mat matRPY = rollPitchYaw.getMat();
-		double *rpy = (double *)matRPY.data;
-		double roll = rpy[0];
-		double pitch = rpy[1];
-		double yaw = rpy[2];
+	void drawPose(
+		cv::InputOutputArray _image,
+		cv::InputArray _rpyxyz,
+		const int margin = 800) {
+
+		cv::Mat matRPYXYZ = _rpyxyz.getMat();
+		double *rpyxyz = (double *)matRPYXYZ.data;
+
+		double roll = rpyxyz[0];
+		double pitch = rpyxyz[1];
+		double yaw = rpyxyz[2];
+
+		double x = rpyxyz[3];
+		double y = rpyxyz[4];
+		double z = rpyxyz[5];
 
 #if CV_MAJOR_VERSION == 3
 		cv::putText(_image, "Roll :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 0), 1, cv::LINE_AA);
 		cv::putText(_image, "Pitch:", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
 		cv::putText(_image, "Yaw  :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+
+		cv::putText(_image, "x: " + std::to_string(int(x)) + "mm", 
+					cv::Point(margin + 20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 255, 0), 1, cv::LINE_AA);
+		cv::putText(_image, "y: " + std::to_string(int(y)) + "mm",
+					cv::Point(margin + 20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+		cv::putText(_image, "z: " + std::to_string(int(z)) + "mm",
+					cv::Point(margin + 20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 255), 1, cv::LINE_AA);
 #else
 		cv::putText(_image.getMatRef(), "Roll :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 0), 1, CV_AA);
 		cv::putText(_image.getMatRef(), "Pitch:", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 0), 1, CV_AA);
 		cv::putText(_image.getMatRef(), "Yaw  :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 0, 255), 1, CV_AA);
+
+		cv::putText(_image.getMatRef(), "x :", cv::Point(20, 20), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 255, 0), 1, CV_AA);
+		cv::putText(_image.getMatRef(), "y :", cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(0, 255, 255), 1, CV_AA);
+		cv::putText(_image.getMatRef(), "z :", cv::Point(20, 60), cv::FONT_HERSHEY_PLAIN, 1.0, cv::Scalar(255, 0, 255), 1, CV_AA);
 #endif
 		cv::rectangle(_image.getMatRef(), cv::Rect(100, 10, 300, 10), cv::Scalar(255, 0, 0), -1);
 		cv::rectangle(_image.getMatRef(), cv::Rect(100, 30, 300, 10), cv::Scalar(0, 255, 0), -1);
@@ -892,6 +914,13 @@ public:
 		cv::rectangle(_image.getMatRef(), cv::Rect(250 + int(roll), 5, 10, 15), cv::Scalar(255, 0, 0), -1);
 		cv::rectangle(_image.getMatRef(), cv::Rect(250 + int(pitch), 25, 10, 15), cv::Scalar(0, 255, 0), -1);
 		cv::rectangle(_image.getMatRef(), cv::Rect(250 + int(yaw), 45, 10, 15), cv::Scalar(0, 0, 255), -1);
+
+		cv::rectangle(_image.getMatRef(), cv::Rect(margin + 150, 10, 300, 10), cv::Scalar(255, 255, 0), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(margin + 150, 30, 300, 10), cv::Scalar(0, 255, 255), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(margin + 150, 50, 300, 10), cv::Scalar(255, 0, 255), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(margin + 300 + int(x / 10), 5, 10, 15), cv::Scalar(255, 255, 0), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(margin + 300 + int(y / 10), 25, 10, 15), cv::Scalar(0, 255, 255), -1);
+		cv::rectangle(_image.getMatRef(), cv::Rect(margin + 300 + int(z / 10), 45, 10, 15), cv::Scalar(255, 0, 255), -1);
 	}
 
 protected:
@@ -2367,9 +2396,9 @@ bool estimate(
 		cv::Mat vis;
 		frame.copyTo(vis);
 		if (validPose) {
+			cv::Vec6d rpyxyz = detector.explain(rvec, tvec);
+			detector.drawPose(vis, rpyxyz);
 			detector.drawAxis(vis, rvec, tvec);
-			cv::Vec3d rpy = detector.getAngles(rvec);
-			detector.drawRollPitchYaw(vis, rpy);
 		}
 
 		cv::imshow("vis", vis);
